@@ -3,11 +3,9 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from config import ADMIN_ID
 from utils import format_request, save_log, format_user_info, load_blocked_users, save_blocked_users
 
-# وضعیت کاربران: چه نوع پیامی دارن می‌نویسن
 user_state = {}
 blocked_users = load_blocked_users()
 
-# دسته‌بندی‌های پیام
 request_categories = {
     "suggestion": "انتقاد و پیشنهاد",
     "admin_request": "درخواست ادمینی",
@@ -17,7 +15,6 @@ request_categories = {
     "freechat": "گفت‌وگوی آزاد"
 }
 
-# منوی اصلی با دکمه‌های Inline
 def get_main_menu_inline():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 انتقاد و پیشنهاد", callback_data="cat_suggestion")],
@@ -28,7 +25,6 @@ def get_main_menu_inline():
         [InlineKeyboardButton("🗣 گفت‌وگوی آزاد", callback_data="cat_freechat")]
     ])
 
-# دکمه پایین صفحه برای بازگشت
 def get_reply_keyboard():
     return ReplyKeyboardMarkup(
         [[KeyboardButton("🏠 بازگشت به منوی اصلی")]],
@@ -36,7 +32,6 @@ def get_reply_keyboard():
         one_time_keyboard=False
     )
 
-# منوی انتخاب نوع ادمین
 def get_admin_type_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎙 ادمین کال", callback_data="admin_call")],
@@ -44,7 +39,6 @@ def get_admin_type_menu():
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
     ])
 
-# بارگذاری متن قوانین از فایل
 def get_rules_text_for(role: str):
     file = "rules_chat.txt" if role == "chat" else "rules_call.txt"
     with open(file, "r", encoding="utf-8") as f:
@@ -102,22 +96,21 @@ def setup_handlers(app: Client):
             return await callback.message.edit_text("❌ دسترسی شما به این ربات مسدود شده است.")
 
         if data.startswith("cat_"):
-            cat_key = data.split("_")[1]
+            cat_key = data.replace("cat_", "")
             if cat_key == "admin_request":
                 await callback.message.edit_text("لطفاً نوع ادمین مورد نظر را انتخاب کنید:", reply_markup=get_admin_type_menu())
             else:
                 user_state[user_id] = {"category": request_categories[cat_key]}
                 await callback.message.edit_text(
-                    f"لطفاً پیام خود را در بخش «{request_categories[cat_key]}» بنویسید.",
-                    reply_markup=None
+                    f"لطفاً پیام خود را در بخش «{request_categories[cat_key]}» بنویسید."
                 )
                 await callback.message.reply("منتظر پیام شما هستم...", reply_markup=get_reply_keyboard())
 
         elif data in ["admin_call", "admin_chat"]:
-            role = "کال" if data == "admin_call" else "چت"
-            user_state[user_id] = {"category": f"ادمین {role}"}
-            await callback.message.edit_text(get_rules_text_for("call" if role == "کال" else "chat"))
-            await callback.message.reply(f"در صورت موافقت با قوانین ادمین {role}، لطفاً درخواست خود را ارسال کنید.", reply_markup=get_reply_keyboard())
+            role = "call" if data == "admin_call" else "chat"
+            user_state[user_id] = {"category": f"ادمین {'کال' if role == 'call' else 'چت'}"}
+            await callback.message.edit_text(get_rules_text_for(role))
+            await callback.message.reply("در صورت موافقت با قوانین بالا، لطفاً درخواست خود را ارسال کنید.", reply_markup=get_reply_keyboard())
 
         elif data == "back_main":
             await callback.message.edit_text("بازگشت به منوی اصلی:", reply_markup=get_main_menu_inline())
@@ -134,10 +127,11 @@ def setup_handlers(app: Client):
             return await message.reply("برای پاسخ دادن، روی پیام کاربر ریپلای بزنید.")
 
         try:
+            # پیدا کردن آیدی کاربر از پیام
             lines = message.reply_to_message.text.split("\n")
             id_line = next((l for l in lines if "ID:" in l), None)
             if not id_line:
-                return await message.reply("❌ نمی‌توان آی‌دی کاربر را تشخیص داد.")
+                return await message.reply("❌ آیدی کاربر در پیام یافت نشد.")
             user_id = int(id_line.split("ID:")[1].strip().split()[0])
             await client.send_message(user_id, f"📩 پاسخ مدیریت:\n{message.text}")
             await message.reply("✅ پاسخ برای کاربر ارسال شد.")
