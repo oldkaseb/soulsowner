@@ -5,6 +5,7 @@ from utils import format_request, save_log, format_user_info, load_blocked_users
 
 user_state = {}
 blocked_users = load_blocked_users()
+reply_state = {}  # admin_id: user_id → برای حالت پاسخ‌دهی هدایت‌شده
 
 request_categories = {
     "suggestion": "انتقاد و پیشنهاد",
@@ -60,15 +61,28 @@ def setup_handlers(app: Client):
         user_id = message.from_user.id
         text = message.text.strip()
 
+        # پاسخ از ادمین در حالت هدایت‌شده
+        if message.from_user.id == ADMIN_ID and ADMIN_ID in reply_state:
+            target_user = reply_state.pop(ADMIN_ID)
+            try:
+                await client.send_message(target_user, f"📩 پاسخ مدیریت:\n{message.text}")
+                await message.reply("✅ پاسخ برای کاربر ارسال شد.")
+            except Exception as e:
+                await message.reply(f"❌ خطا در ارسال پاسخ: {e}")
+            return
+
+        # بازگشت به منو
         if text == "🏠 بازگشت به منوی اصلی":
             return await message.reply(
                 "بازگشت به منوی اصلی:",
                 reply_markup=get_main_menu_inline()
             )
 
+        # اگر بلاک‌شده بود
         if user_id in blocked_users:
             return await message.reply("❌ دسترسی شما به این ربات مسدود شده است.")
 
+        # کاربر هیچ گزینه‌ای انتخاب نکرده
         if user_id not in user_state:
             return await message.reply(
                 "لطفاً ابتدا یک گزینه از منو انتخاب کنید.",
@@ -80,7 +94,10 @@ def setup_handlers(app: Client):
 
         full_text = format_request(message.from_user, category, text)
         buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚫 بلاک کاربر", callback_data=f"block_{user_id}")]
+            [
+                InlineKeyboardButton("✉️ پاسخ به کاربر", callback_data=f"replyto_{user_id}"),
+                InlineKeyboardButton("🚫 بلاک کاربر", callback_data=f"block_{user_id}")
+            ]
         ])
 
         await client.send_message(ADMIN_ID, full_text, reply_markup=buttons)
@@ -95,6 +112,7 @@ def setup_handlers(app: Client):
         if user_id in blocked_users:
             return await callback.message.edit_text("❌ دسترسی شما به این ربات مسدود شده است.")
 
+        # دکمه‌های دسته‌بندی
         if data.startswith("cat_"):
             cat_key = data.replace("cat_", "")
             if cat_key == "admin_request":
@@ -106,6 +124,7 @@ def setup_handlers(app: Client):
                 )
                 await callback.message.reply("منتظر پیام شما هستم...", reply_markup=get_reply_keyboard())
 
+        # انتخاب نوع ادمین
         elif data in ["admin_call", "admin_chat"]:
             role = "call" if data == "admin_call" else "chat"
             user_state[user_id] = {"category": f"ادمین {'کال' if role == 'call' else 'چت'}"}
@@ -115,28 +134,18 @@ def setup_handlers(app: Client):
         elif data == "back_main":
             await callback.message.edit_text("بازگشت به منوی اصلی:", reply_markup=get_main_menu_inline())
 
+        # بلاک کاربر
         elif data.startswith("block_"):
             block_id = int(data.split("_")[1])
             blocked_users.add(block_id)
             save_blocked_users(blocked_users)
             await callback.message.reply(f"✅ کاربر `{block_id}` بلاک شد.")
 
-    @app.on_message(filters.reply & filters.user(ADMIN_ID))
-    async def reply_handler(client, message: Message):
-        if not message.reply_to_message:
-            return await message.reply("برای پاسخ دادن، روی پیام کاربر ریپلای بزنید.")
-
-        try:
-            # پیدا کردن آیدی کاربر از پیام
-            lines = message.reply_to_message.text.split("\n")
-            id_line = next((l for l in lines if "ID:" in l), None)
-            if not id_line:
-                return await message.reply("❌ آیدی کاربر در پیام یافت نشد.")
-            user_id = int(id_line.split("ID:")[1].strip().split()[0])
-            await client.send_message(user_id, f"📩 پاسخ مدیریت:\n{message.text}")
-            await message.reply("✅ پاسخ برای کاربر ارسال شد.")
-        except Exception as e:
-            await message.reply(f"❌ خطا در ارسال پاسخ: {e}")
+        # پاسخ به کاربر
+        elif data.startswith("replyto_"):
+            target_user = int(data.split("_")[1])
+            reply_state[ADMIN_ID] = target_user
+            await callback.message.reply("✉️ لطفاً پاسخ خود را بنویس. این پیام به کاربر ارسال خواهد شد.")
 
     @app.on_message(filters.command("stats") & filters.user(ADMIN_ID))
     async def stats_handler(client, message: Message):
