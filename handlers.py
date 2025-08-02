@@ -1,28 +1,42 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 from config import ADMIN_ID
 from utils import format_request, save_log, format_user_info, load_blocked_users, save_blocked_users
 
-user_state = {}  # user_id: {"category": "انتقاد", "step": "awaiting_text"}
+# وضعیت کاربران: چه نوع پیامی دارن می‌نویسن
+user_state = {}
 blocked_users = load_blocked_users()
+
+# دسته‌بندی‌های پیام
 request_categories = {
     "suggestion": "انتقاد و پیشنهاد",
     "admin_request": "درخواست ادمینی",
     "sponsorship": "پیشنهاد اسپانسری",
     "complaint": "شکایت",
-    "confession": "اعتراف"
+    "confession": "اعتراف",
+    "freechat": "گفت‌وگوی آزاد"
 }
 
-def get_main_menu():
+# منوی اصلی با دکمه‌های Inline
+def get_main_menu_inline():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📢 انتقاد و پیشنهاد", callback_data="cat_suggestion")],
         [InlineKeyboardButton("🙋 درخواست ادمینی", callback_data="cat_admin_request")],
         [InlineKeyboardButton("💰 پیشنهاد اسپانسری", callback_data="cat_sponsorship")],
         [InlineKeyboardButton("⚠️ شکایت", callback_data="cat_complaint")],
         [InlineKeyboardButton("😶 اعتراف", callback_data="cat_confession")],
-        [InlineKeyboardButton("📜 قوانین ارتباط با مدیریت", callback_data="rules_main")]
+        [InlineKeyboardButton("🗣 گفت‌وگوی آزاد", callback_data="cat_freechat")]
     ])
 
+# دکمه پایین صفحه برای بازگشت
+def get_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("🏠 بازگشت به منوی اصلی")]],
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+# منوی انتخاب نوع ادمین
 def get_admin_type_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎙 ادمین کال", callback_data="admin_call")],
@@ -30,9 +44,7 @@ def get_admin_type_menu():
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
     ])
 
-def back_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data="back_main")]])
-
+# بارگذاری متن قوانین از فایل
 def get_rules_text_for(role: str):
     file = "rules_chat.txt" if role == "chat" else "rules_call.txt"
     with open(file, "r", encoding="utf-8") as f:
@@ -43,8 +55,43 @@ def setup_handlers(app: Client):
     @app.on_message(filters.command("start"))
     async def start_handler(client, message: Message):
         if message.from_user.id in blocked_users:
-            return await message.reply("دسترسی شما به این ربات مسدود شده است.")
-        await message.reply("به ربات ارتباط با مدیریت خوش آمدید. لطفاً یک گزینه انتخاب کنید:", reply_markup=get_main_menu())
+            return await message.reply("❌ شما توسط مدیریت بلاک شده‌اید.")
+        await message.reply(
+            "به ربات ارتباط با مدیریت خوش آمدید.\nیکی از گزینه‌های زیر را انتخاب کنید:",
+            reply_markup=get_main_menu_inline()
+        )
+
+    @app.on_message(filters.text & filters.private & ~filters.command(["start", "stats"]))
+    async def text_handler(client, message: Message):
+        user_id = message.from_user.id
+        text = message.text.strip()
+
+        if text == "🏠 بازگشت به منوی اصلی":
+            return await message.reply(
+                "بازگشت به منوی اصلی:",
+                reply_markup=get_main_menu_inline()
+            )
+
+        if user_id in blocked_users:
+            return await message.reply("❌ دسترسی شما به این ربات مسدود شده است.")
+
+        if user_id not in user_state:
+            return await message.reply(
+                "لطفاً ابتدا یک گزینه از منو انتخاب کنید.",
+                reply_markup=get_main_menu_inline()
+            )
+
+        category = user_state[user_id]["category"]
+        del user_state[user_id]
+
+        full_text = format_request(message.from_user, category, text)
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚫 بلاک کاربر", callback_data=f"block_{user_id}")]
+        ])
+
+        await client.send_message(ADMIN_ID, full_text, reply_markup=buttons)
+        await message.reply("✅ پیام شما با موفقیت برای مدیریت ارسال شد. لطفاً منتظر پاسخ باشید.")
+        save_log(user_id, category, text)
 
     @app.on_callback_query()
     async def callback_handler(client, callback: CallbackQuery):
@@ -52,61 +99,60 @@ def setup_handlers(app: Client):
         data = callback.data
 
         if user_id in blocked_users:
-            return await callback.message.edit_text("دسترسی شما به این ربات مسدود شده است.")
+            return await callback.message.edit_text("❌ دسترسی شما به این ربات مسدود شده است.")
 
         if data.startswith("cat_"):
-            category_key = data.split("_")[1]
-            if category_key == "admin_request":
-                await callback.message.edit_text("نوع ادمینی را انتخاب کنید:", reply_markup=get_admin_type_menu())
+            cat_key = data.split("_")[1]
+            if cat_key == "admin_request":
+                await callback.message.edit_text("لطفاً نوع ادمین مورد نظر را انتخاب کنید:", reply_markup=get_admin_type_menu())
             else:
-                user_state[user_id] = {"category": request_categories[category_key]}
-                await callback.message.edit_text(f"لطفاً پیام خود را در زمینه «{request_categories[category_key]}» بنویسید.", reply_markup=back_button())
+                user_state[user_id] = {"category": request_categories[cat_key]}
+                await callback.message.edit_text(
+                    f"لطفاً پیام خود را در بخش «{request_categories[cat_key]}» بنویسید.",
+                    reply_markup=None
+                )
+                await callback.message.reply("منتظر پیام شما هستم...", reply_markup=get_reply_keyboard())
 
-        elif data == "admin_call":
-            user_state[user_id] = {"category": "ادمین کال"}
-            await callback.message.edit_text(get_rules_text_for("call"))
-            await callback.message.reply("در صورت موافقت با قوانین بالا، لطفاً درخواست خود را ارسال کنید.")
-
-        elif data == "admin_chat":
-            user_state[user_id] = {"category": "ادمین چت"}
-            await callback.message.edit_text(get_rules_text_for("chat"))
-            await callback.message.reply("در صورت موافقت با قوانین بالا، لطفاً درخواست خود را ارسال کنید.")
-
-        elif data == "rules_main":
-            await callback.message.edit_text("قوانین کلی ارتباط با مدیریت:\nارتباط شما ثبت و به صورت خصوصی بررسی می‌شود.\nبرای برخی بخش‌ها قوانین اختصاصی نمایش داده خواهد شد.", reply_markup=back_button())
+        elif data in ["admin_call", "admin_chat"]:
+            role = "کال" if data == "admin_call" else "چت"
+            user_state[user_id] = {"category": f"ادمین {role}"}
+            await callback.message.edit_text(get_rules_text_for("call" if role == "کال" else "chat"))
+            await callback.message.reply(f"در صورت موافقت با قوانین ادمین {role}، لطفاً درخواست خود را ارسال کنید.", reply_markup=get_reply_keyboard())
 
         elif data == "back_main":
-            await callback.message.edit_text("به منوی اصلی برگشتید:", reply_markup=get_main_menu())
+            await callback.message.edit_text("بازگشت به منوی اصلی:", reply_markup=get_main_menu_inline())
 
         elif data.startswith("block_"):
-            to_block = int(data.split("_")[1])
-            blocked_users.add(to_block)
+            block_id = int(data.split("_")[1])
+            blocked_users.add(block_id)
             save_blocked_users(blocked_users)
-            await callback.message.reply(f"کاربر {to_block} بلاک شد.")
-
-    @app.on_message(filters.private & filters.text)
-    async def text_handler(client, message: Message):
-        user_id = message.from_user.id
-
-        if user_id in blocked_users:
-            return await message.reply("دسترسی شما به این ربات مسدود شده است.")
-
-        if user_id not in user_state:
-            return await message.reply("لطفاً ابتدا یک گزینه از منوی اصلی انتخاب کنید.", reply_markup=get_main_menu())
-
-        category = user_state[user_id]["category"]
-        del user_state[user_id]
-
-        full_text = format_request(message.from_user, category, message.text)
-        buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚫 بلاک کاربر", callback_data=f"block_{user_id}")]
-        ])
-
-        await client.send_message(ADMIN_ID, full_text, reply_markup=buttons)
-        await message.reply("درخواست شما با موفقیت برای مدیریت ارسال شد. منتظر پاسخ بمانید.")
-        save_log(user_id, category, message.text)
+            await callback.message.reply(f"✅ کاربر `{block_id}` بلاک شد.")
 
     @app.on_message(filters.reply & filters.user(ADMIN_ID))
     async def reply_handler(client, message: Message):
-        if not message.reply_to_message or "ID:" not in message.reply_to_message.text:
-            return await message.r
+        if not message.reply_to_message:
+            return await message.reply("برای پاسخ دادن، روی پیام کاربر ریپلای بزنید.")
+
+        try:
+            lines = message.reply_to_message.text.split("\n")
+            id_line = next((l for l in lines if "ID:" in l), None)
+            if not id_line:
+                return await message.reply("❌ نمی‌توان آی‌دی کاربر را تشخیص داد.")
+            user_id = int(id_line.split("ID:")[1].strip().split()[0])
+            await client.send_message(user_id, f"📩 پاسخ مدیریت:\n{message.text}")
+            await message.reply("✅ پاسخ برای کاربر ارسال شد.")
+        except Exception as e:
+            await message.reply(f"❌ خطا در ارسال پاسخ: {e}")
+
+    @app.on_message(filters.command("stats") & filters.user(ADMIN_ID))
+    async def stats_handler(client, message: Message):
+        try:
+            import json
+            with open("logs.json", "r", encoding="utf-8") as f:
+                logs = json.load(f)
+        except:
+            logs = []
+
+        total = len(logs)
+        blocked = len(blocked_users)
+        await message.reply(f"📊 آمار:\n- کل درخواست‌ها: {total}\n- کاربران بلاک‌شده: {blocked}")
