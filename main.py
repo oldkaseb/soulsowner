@@ -440,6 +440,35 @@ async def cmd_menu(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(MAIN_MENU_TEXT, reply_markup=main_menu_kb())
 
+@dp.message(Command("whoami"))
+async def cmd_whoami(m: Message):
+    if m.chat.type != "private":
+        return
+    # مطمئن می‌شیم تو جدول users ثبت شدی
+    await upsert_user(m)
+    u = await get_user(m.from_user.id)
+    is_admin = (u.is_admin if u else False)
+    uname = ("@" + m.from_user.username) if m.from_user.username else "-"
+    full_name = " ".join(filter(None, [m.from_user.first_name, m.from_user.last_name])) or "-"
+    await m.answer(
+        "اطلاعات شما:\n"
+        f"🆔 ID: <code>{m.from_user.id}</code>\n"
+        f"👤 نام: {full_name}\n"
+        f"📛 یوزرنیم: {uname}\n"
+        f"🔐 ادمین: {'✅' if is_admin else '❌'}"
+    )
+
+@dp.message(Command("seedadmin"))
+async def cmd_seedadmin(m: Message):
+    if m.chat.type != "private":
+        return
+    # اگر هیچ ادمینی وجود ندارد، شما را به‌عنوان اولین ادمین ثبت می‌کند
+    ids = await get_admin_ids()
+    if ids:
+        return await m.answer("⛔ قبلاً ادمین ثبت شده. برای اضافه‌کردن بقیه از دستور /addadmin استفاده کنید.")
+    await set_admin(m.from_user.id, True)
+    await m.answer("✅ شما به‌عنوان اولین ادمین ثبت شدید. حالا می‌تونید از دستورات ادمینی استفاده کنید (مثلاً /adminhelp).")
+
 @dp.message(Command("help"))
 async def cmd_help(m: Message):
     if m.chat.type != "private":
@@ -948,4 +977,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
