@@ -461,7 +461,7 @@ async def cmd_menu(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(MAIN_MENU_TEXT, reply_markup=main_menu_kb())
 
-@dp.message(Command("whoami")))
+@dp.message(Command("whoami"))
 async def cmd_whoami(m: Message):
     if m.chat.type != "private":
         return
@@ -998,3 +998,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
