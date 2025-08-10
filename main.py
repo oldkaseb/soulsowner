@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Telegram Bot – aiogram v3.7 + asyncpg (single file)
+Telegram Bot – aiogram v3.7+ + asyncpg (single file)
 
 ENV (Railway):
   BOT_TOKEN="..."
@@ -56,9 +56,10 @@ WELCOME_TEXT = """سلام! 👋
 MAIN_MENU_TEXT = "یکی از گزینه‌ها را انتخاب کنید:"
 
 # Buttons
-BTN_SECTION_BOTS  = "🤖 گفت‌وگو درباره ربات‌ها"
-BTN_SECTION_SOULS = "💬 گروه Souls"
-BTN_SECTION_VSERV = "🛍️ خدمات مجازی"
+BTN_SECTION_BOTS   = "🤖 گفت‌وگو درباره ربات‌ها"
+BTN_SECTION_SOULS  = "💬 گروه Souls"
+BTN_SECTION_VSERV  = "🛍️ خدمات مجازی"
+BTN_SECTION_FREE   = "🗣️ گفت‌وگوی آزاد"
 
 BTN_GROUP_ADMIN_CHAT = "درخواست ادمین چت"
 BTN_GROUP_ADMIN_CALL = "درخواست ادمین کال"
@@ -66,14 +67,14 @@ BTN_GROUP_ADMIN_CALL = "درخواست ادمین کال"
 BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"  # فقط برای Souls
 BTN_CANCEL       = "❌ انصراف"
 BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"
-BTN_QUICK_SEND   = "✉️ ارسال پیام"               # برای bots/vserv
+BTN_QUICK_SEND   = "✉️ ارسال پیام"               # برای bots/vserv/free
 
 BTN_REPLY        = "✉️ پاسخ"
 BTN_REPLY_AGAIN  = "✉️ پاسخِ مجدد"
 
 # Callback data prefixes
 CB_MAIN    = "main"
-CB_SEC     = "sec"      # sec|bots / sec|souls / sec|vserv
+CB_SEC     = "sec"      # sec|bots / sec|souls / sec|vserv / sec|free
 CB_SOULS   = "souls"    # souls|chat / souls|call
 CB_ACTION  = "act"      # act|send|<kind> or act|cancel|<kind>
 CB_AGAIN   = "again"    # again|start
@@ -139,13 +140,11 @@ CREATE TABLE IF NOT EXISTS groups (
 );
 """
 
-# Defaults if files are missing
 DEFAULT_RULES: List[Tuple[str, str, str]] = [
     ("souls", "chat", "قوانین چت گروه Souls: محترم باشید و از اسپم خودداری کنید."),
     ("souls", "call", "قوانین کال گروه Souls: هماهنگی زمان و رعایت ادب الزامی است."),
     ("bots",  "general", "برای گفت‌وگو درباره ربات‌ها: نام ربات، مشکل/درخواست و اسکرین‌شات را ذکر کنید."),
-    ("vserv", "general",
-     "لطفاً قبل از سفارش، نوع سرویس، جزئیات و زمان‌بندی را واضح بنویسید."),
+    ("vserv", "general", "لطفاً قبل از سفارش، نوع سرویس، جزئیات و زمان‌بندی را واضح بنویسید."),
 ]
 
 VIRTUAL_SERVICES_LIST = (
@@ -160,22 +159,18 @@ VIRTUAL_SERVICES_LIST = (
 )
 
 async def init_db():
-    """Create tables, seed rules & admins, and read local rules files if exist."""
     global DB_POOL
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     async with DB_POOL.acquire() as conn:
         await conn.execute(CREATE_SQL)
-        # default rules (insert if missing)
+        # seed default rules
         for section, kind, text in DEFAULT_RULES:
             await conn.execute(
-                """
-                INSERT INTO rules(section, kind, text)
-                VALUES($1,$2,$3)
-                ON CONFLICT (section, kind) DO NOTHING
-                """,
+                """INSERT INTO rules(section, kind, text) VALUES($1,$2,$3)
+                   ON CONFLICT (section, kind) DO NOTHING""",
                 section, kind, text,
             )
-        # load local rules files if present
+        # load local rules files if exist
         try:
             chat_p = Path("rules_chat.txt")
             call_p = Path("rules_call.txt")
@@ -197,16 +192,15 @@ async def init_db():
                     )
         except Exception as e:
             logging.warning("could not load local rules files: %s", e)
-        # seed admins
+
+        # seed admins from env
         if ADMIN_ID_RAW:
             nums = [n for n in ADMIN_ID_RAW.replace(",", " ").split() if n.isdigit()]
             for uid in map(int, nums):
                 await conn.execute(
-                    """
-                    INSERT INTO users(user_id, is_admin, blocked)
-                    VALUES($1, TRUE, FALSE)
-                    ON CONFLICT (user_id) DO UPDATE SET is_admin=EXCLUDED.is_admin
-                    """,
+                    """INSERT INTO users(user_id, is_admin, blocked)
+                       VALUES($1, TRUE, FALSE)
+                       ON CONFLICT (user_id) DO UPDATE SET is_admin=EXCLUDED.is_admin""",
                     uid,
                 )
 
@@ -215,14 +209,26 @@ async def upsert_user(m: Message):
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         await conn.execute(
-            """
-            INSERT INTO users(user_id, is_admin, blocked, first_name, last_name, username)
-            VALUES($1, FALSE, FALSE, $2, $3, $4)
-            ON CONFLICT (user_id) DO UPDATE SET first_name=EXCLUDED.first_name,
-                                               last_name=EXCLUDED.last_name,
-                                               username=EXCLUDED.username
-            """,
+            """INSERT INTO users(user_id, is_admin, blocked, first_name, last_name, username)
+               VALUES($1, FALSE, FALSE, $2, $3, $4)
+               ON CONFLICT (user_id) DO UPDATE SET
+                 first_name=EXCLUDED.first_name,
+                 last_name =EXCLUDED.last_name,
+                 username  =EXCLUDED.username""",
             m.from_user.id, m.from_user.first_name, m.from_user.last_name, m.from_user.username,
+        )
+
+async def upsert_user_profile(user_id: int, first_name: Optional[str], last_name: Optional[str], username: Optional[str]):
+    assert DB_POOL is not None
+    async with DB_POOL.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO users(user_id, is_admin, blocked, first_name, last_name, username)
+               VALUES($1, FALSE, FALSE, $2, $3, $4)
+               ON CONFLICT (user_id) DO UPDATE SET
+                 first_name=EXCLUDED.first_name,
+                 last_name =EXCLUDED.last_name,
+                 username  =EXCLUDED.username""",
+            user_id, first_name, last_name, username
         )
 
 async def get_user(user_id: int) -> Optional[User]:
@@ -265,10 +271,8 @@ async def set_rules(section: str, kind: str, text: str):
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         await conn.execute(
-            """
-            INSERT INTO rules(section, kind, text) VALUES($1,$2,$3)
-            ON CONFLICT (section, kind) DO UPDATE SET text=EXCLUDED.text
-            """,
+            """INSERT INTO rules(section, kind, text) VALUES($1,$2,$3)
+               ON CONFLICT (section, kind) DO UPDATE SET text=EXCLUDED.text""",
             section, kind, text,
         )
 
@@ -285,12 +289,11 @@ async def upsert_group(chat_id: int, title: Optional[str], username: Optional[st
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         await conn.execute(
-            """
-            INSERT INTO groups(chat_id, title, username, is_active)
-            VALUES($1,$2,$3,$4)
-            ON CONFLICT (chat_id) DO UPDATE
-            SET title=EXCLUDED.title, username=EXCLUDED.username, is_active=EXCLUDED.is_active, updated_at=NOW()
-            """,
+            """INSERT INTO groups(chat_id, title, username, is_active)
+               VALUES($1,$2,$3,$4)
+               ON CONFLICT (chat_id) DO UPDATE
+                 SET title=EXCLUDED.title, username=EXCLUDED.username,
+                     is_active=EXCLUDED.is_active, updated_at=NOW()""",
             chat_id, title, username, active
         )
 
@@ -315,9 +318,10 @@ async def list_groups(limit: int = 50) -> List[Tuple[int, str]]:
 # -------------------- Keyboards --------------------
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_SECTION_BOTS,  callback_data=f"{CB_SEC}|bots")],
         [InlineKeyboardButton(text=BTN_SECTION_SOULS, callback_data=f"{CB_SEC}|souls")],
+        [InlineKeyboardButton(text=BTN_SECTION_BOTS,  callback_data=f"{CB_SEC}|bots")],
         [InlineKeyboardButton(text=BTN_SECTION_VSERV, callback_data=f"{CB_SEC}|vserv")],
+        [InlineKeyboardButton(text=BTN_SECTION_FREE,  callback_data=f"{CB_SEC}|free")],
     ])
 
 def souls_submenu_kb() -> InlineKeyboardMarkup:
@@ -328,14 +332,12 @@ def souls_submenu_kb() -> InlineKeyboardMarkup:
     ])
 
 def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
-    # فقط برای Souls: پذیرش قوانین
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_ACTION}|send|{kind}")],
         [InlineKeyboardButton(text=BTN_CANCEL,       callback_data=f"{CB_ACTION}|cancel|{kind}")],
     ])
 
 def quick_send_kb(kind: str) -> InlineKeyboardMarkup:
-    # برای bots/vserv: ارسال پیام مستقیم
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_QUICK_SEND, callback_data=f"{CB_ACTION}|send|{kind}")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
@@ -361,7 +363,7 @@ def _normalize_fa(s: str) -> str:
 
 def contains_malek(text: str) -> bool:
     t = _normalize_fa(text or "")
-    return "مالک" in t  # شامل حالت‌های «مالکش/مالکشو/مالک‌ها/…»
+    return "مالک" in t
 
 async def disable_markup(call: CallbackQuery):
     try:
@@ -369,31 +371,43 @@ async def disable_markup(call: CallbackQuery):
     except Exception:
         pass
 
-async def require_admin(message: Message) -> bool:
-    # مطمئن شو در users ثبت است
-    await upsert_user(message)
-    u = await get_user(message.from_user.id)
+# --- admin check: message vs callback ---
+async def _check_and_seed_admin(user_id: int) -> bool:
+    # اگر در ENV است، ارتقا بده
+    if user_id in ADMIN_IDS_SEED:
+        u = await get_user(user_id)
+        if not (u and u.is_admin):
+            await set_admin(user_id, True)
+        return True
+    # در غیر اینصورت وضعیت فعلی DB
+    u = await get_user(user_id)
+    return bool(u and u.is_admin)
 
-    # اگر در ENV به عنوان ادمین تعریف شده، ارتقا بده
-    if (not u or not u.is_admin) and (message.from_user.id in ADMIN_IDS_SEED):
-        await set_admin(message.from_user.id, True)
-        u = await get_user(message.from_user.id)
+async def require_admin_msg(m: Message) -> bool:
+    await upsert_user(m)
+    ok = await _check_and_seed_admin(m.from_user.id)
+    if not ok:
+        await m.answer("⛔ این دستور مخصوص ادمین‌هاست.")
+    return ok
 
-    if not (u and u.is_admin):
-        await message.answer("⛔ این دستور مخصوص ادمین‌هاست.")
-        return False
-    return True
+async def require_admin_call(call: CallbackQuery) -> bool:
+    u = call.from_user
+    await upsert_user_profile(u.id, u.first_name, u.last_name, u.username)
+    ok = await _check_and_seed_admin(u.id)
+    if not ok:
+        await call.message.answer("⛔ این دستور مخصوص ادمین‌هاست.")
+    return ok
 
 # -------------------- Album helpers --------------------
-_album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}         # برای broadcast به کاربران
+_album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_users: Dict[tuple, asyncio.Task] = {}
-_album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}        # برای broadcast به گروه‌ها
+_album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_groups: Dict[tuple, asyncio.Task] = {}
 
-_album_buffer_u2a: Dict[tuple, List[Dict[str, Any]]] = {}           # user -> admin
+_album_buffer_u2a: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_u2a: Dict[tuple, asyncio.Task] = {}
 
-_album_buffer_admin_reply: Dict[tuple, List[Dict[str, Any]]] = {}   # admin -> user
+_album_buffer_admin_reply: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_admin_reply: Dict[tuple, asyncio.Task] = {}
 
 def _collect_item_from_message(m: Message) -> Optional[Dict[str, Any]]:
@@ -453,7 +467,6 @@ async def cmd_menu(m: Message, state: FSMContext):
 async def cmd_whoami(m: Message):
     if m.chat.type != "private":
         return
-    # مطمئن می‌شیم تو جدول users ثبت شدی
     await upsert_user(m)
     u = await get_user(m.from_user.id)
     is_admin = (u.is_admin if u else False)
@@ -471,7 +484,6 @@ async def cmd_whoami(m: Message):
 async def cmd_seedadmin(m: Message):
     if m.chat.type != "private":
         return
-    # اگر هیچ ادمینی وجود ندارد، شما را به‌عنوان اولین ادمین ثبت می‌کند
     ids = await get_admin_ids()
     if ids:
         return await m.answer("⛔ قبلاً ادمین ثبت شده. برای اضافه‌کردن بقیه از دستور /addadmin استفاده کنید.")
@@ -494,7 +506,7 @@ async def cmd_help(m: Message):
 
 @dp.message(Command("adminhelp"))
 async def cmd_adminhelp(m: Message):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     text = (
         "راهنمای ادمین‌ها:\n"
@@ -519,14 +531,14 @@ async def cmd_adminhelp(m: Message):
 # -------------------- Admin: broadcasts to USERS --------------------
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     await state.set_state(Broadcast.waiting_for_message)
     await m.answer("پیام/فایل/آلبوم برای *کاربران* را بفرستید. لغو: /cancel")
 
 @dp.message(Broadcast.waiting_for_message)
 async def on_broadcast_to_users(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
@@ -556,7 +568,6 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
         _album_tasks_users[key] = asyncio.create_task(_flush())
         return
 
-    # single
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
@@ -575,14 +586,14 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
 # -------------------- Admin: broadcasts to GROUPS --------------------
 @dp.message(Command("groupsend"))
 async def cmd_groupsend(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     await state.set_state(GroupBroadcast.waiting_for_message)
     await m.answer("پیام/فایل/آلبوم برای *تمام گروه‌ها* را بفرستید. لغو: /cancel")
 
 @dp.message(GroupBroadcast.waiting_for_message)
 async def on_broadcast_to_groups(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
@@ -623,7 +634,7 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
 
 @dp.message(Command("listgroups"))
 async def cmd_listgroups(m: Message):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     items = await list_groups(limit=50)
     if not items:
@@ -633,7 +644,7 @@ async def cmd_listgroups(m: Message):
 
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
@@ -643,7 +654,7 @@ async def cmd_stats(m: Message):
 
 @dp.message(Command("addadmin"))
 async def cmd_addadmin(m: Message, command: CommandObject):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if not command.args or not command.args.strip().isdigit():
         return await m.answer("فرمت: /addadmin <user_id>")
@@ -652,7 +663,7 @@ async def cmd_addadmin(m: Message, command: CommandObject):
 
 @dp.message(Command("deladmin"))
 async def cmd_deladmin(m: Message, command: CommandObject):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if not command.args or not command.args.strip().isdigit():
         return await m.answer("فرمت: /deladmin <user_id>")
@@ -661,7 +672,7 @@ async def cmd_deladmin(m: Message, command: CommandObject):
 
 @dp.message(Command("block"))
 async def cmd_block(m: Message, command: CommandObject):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if not command.args or not command.args.strip().isdigit():
         return await m.answer("فرمت: /block <user_id>")
@@ -670,7 +681,7 @@ async def cmd_block(m: Message, command: CommandObject):
 
 @dp.message(Command("unblock"))
 async def cmd_unblock(m: Message, command: CommandObject):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if not command.args or not command.args.strip().isdigit():
         return await m.answer("فرمت: /unblock <user_id>")
@@ -679,7 +690,7 @@ async def cmd_unblock(m: Message, command: CommandObject):
 
 @dp.message(Command("reply"))
 async def cmd_reply(m: Message, state: FSMContext, command: CommandObject):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if not command.args or not command.args.strip().isdigit():
         return await m.answer("فرمت: /reply <user_id>")
@@ -688,12 +699,12 @@ async def cmd_reply(m: Message, state: FSMContext, command: CommandObject):
     await state.update_data(target_id=target_id)
     await m.answer(f"متن یا فایل/آلبومِ پاسخ برای کاربر {target_id} را بفرستید. لغو: /cancel")
 
-# inline reply (buttons)
+# inline reply (buttons) — FIXED admin check (use call.from_user)
 @dp.callback_query(F.data.startswith(f"{CB_REPLY}|"))
 async def cb_reply(call: CallbackQuery, state: FSMContext):
     if call.message.chat.type != "private":
         return
-    if not await require_admin(call.message):
+    if not await require_admin_call(call):
         return
     _, uid = call.data.split("|", 1)
     await state.set_state(AdminReply.waiting_for_any)
@@ -704,12 +715,11 @@ async def cb_reply(call: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminReply.waiting_for_any)
 async def on_admin_reply_any(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     data = await state.get_data()
     target_id = int(data.get("target_id"))
 
-    # آلبوم
     if m.media_group_id:
         key = (m.from_user.id, target_id, m.media_group_id)
         buf = _album_buffer_admin_reply.get(key, [])
@@ -729,7 +739,6 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
         _album_tasks_admin_reply[key] = asyncio.create_task(_flush())
         return
 
-    # تک‌پیام (همهٔ انواع)
     try:
         await bot.copy_message(chat_id=target_id, from_chat_id=m.chat.id, message_id=m.message_id)
         await log_message(m.from_user.id, target_id, "admin_to_user", m.caption or m.text or m.content_type)
@@ -741,7 +750,7 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
 # -------------------- Rules setters --------------------
 @dp.message(Command("setrules"))
 async def cmd_setrules(m: Message, state: FSMContext, command: CommandObject):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if not command.args:
         return await m.answer("فرمت: /setrules <section> <kind>\nمثال: /setrules souls chat")
@@ -757,7 +766,7 @@ async def cmd_setrules(m: Message, state: FSMContext, command: CommandObject):
 
 @dp.message(Command("setchat"))
 async def cmd_setchat(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     await state.set_state(SetRules.waiting_for_text)
     await state.update_data(section="souls", kind="chat")
@@ -765,7 +774,7 @@ async def cmd_setchat(m: Message, state: FSMContext):
 
 @dp.message(Command("setcall"))
 async def cmd_setcall(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     await state.set_state(SetRules.waiting_for_text)
     await state.update_data(section="souls", kind="call")
@@ -773,7 +782,7 @@ async def cmd_setcall(m: Message, state: FSMContext):
 
 @dp.message(Command("setvserv"))
 async def cmd_setvserv(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     await state.set_state(SetRules.waiting_for_text)
     await state.update_data(section="vserv", kind="general")
@@ -781,7 +790,7 @@ async def cmd_setvserv(m: Message, state: FSMContext):
 
 @dp.message(SetRules.waiting_for_text)
 async def on_set_rules_text(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
     data = await state.get_data()
     await set_rules(data["section"], data["kind"], m.html_text)
@@ -813,15 +822,11 @@ async def on_section(call: CallbackQuery):
     _, section = call.data.split("|", 1)
 
     if section == "souls":
-        # فقط Souls → پذیرش قوانین
         await call.message.answer("بخش گروه Souls – نوع درخواست را انتخاب کنید:", reply_markup=souls_submenu_kb())
 
     elif section == "bots":
         rules = await get_rules("bots", "general")
-        text = (
-            f"{rules}\n\n"
-            "برای ارسال پیام درباره ربات‌ها، روی دکمه‌ی زیر بزنید و توضیحات خود را بفرستید."
-        )
+        text = f"{rules}\n\nبرای ارسال پیام درباره ربات‌ها، روی دکمه‌ی زیر بزنید و توضیحات خود را بفرستید."
         await call.message.answer(text, reply_markup=quick_send_kb("bots"))
 
     elif section == "vserv":
@@ -830,9 +835,16 @@ async def on_section(call: CallbackQuery):
             "🛍️ لیست خدمات مجازی:\n"
             f"{VIRTUAL_SERVICES_LIST}\n\n"
             f"{rules}\n\n"
-            "برای ثبت درخواست، روی «ارسال پیام» بزنید و سرویس موردنظر، مقدار/تعداد، لینک‌ها و زمان‌بندی را بنویسید."
+            "برای ثبت درخواست، روی «ارسال پیام» بزنید و سرویس/تعداد/لینک‌ها/زمان‌بندی را بنویسید."
         )
         await call.message.answer(text, reply_markup=quick_send_kb("vserv"))
+
+    elif section == "free":
+        text = (
+            "🗣️ گفت‌وگوی آزاد\n"
+            "سؤال یا موضوع آزادت رو بنویس؛ من به ادمین می‌رسونم و از همین‌جا جواب می‌گیری."
+        )
+        await call.message.answer(text, reply_markup=quick_send_kb("free"))
 
     await call.answer()
 
@@ -854,7 +866,7 @@ async def on_action(call: CallbackQuery, state: FSMContext):
     _, action, kind = call.data.split("|", 2)
     if action == "send":
         await state.set_state(SendToAdmin.waiting_for_text)
-        await state.update_data(kind=kind)
+        await state.update_data(kind=kind)  # bots/vserv/free/chat/call
         await call.message.answer("لطفاً پیام/فایل/آلبوم خود را ارسال کنید. لغو: /cancel")
     else:
         await state.clear()
@@ -880,24 +892,20 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         return await m.answer("شما مسدود شده‌اید.")
 
     data = await state.get_data()
-    kind = data.get("kind", "general")  # bots / vserv / chat / call
+    kind = data.get("kind", "general")  # bots / vserv / free / chat / call
     admin_ids = await get_admin_ids()
     if not admin_ids:
-        await m.answer("فعلاً ادمینی ثبت نشده.")
-        return
+        return await m.answer("فعلاً ادمینی ثبت نشده.")
 
-    # اطلاعات کامل کاربر برای ادمین
     full_name = " ".join(filter(None, [m.from_user.first_name, m.from_user.last_name])) or "-"
     uname = ("@" + m.from_user.username) if m.from_user.username else "-"
     info_text = (
         f"📬 پیام جدید از <a href=\"tg://user?id={m.from_user.id}\">{full_name}</a>\n"
         f"🆔 ID: <code>{m.from_user.id}</code>\n"
         f"👤 Username: {uname}\n"
-        f"بخش: {kind}\n\n"
-        "— برای پاسخ از دکمه‌های زیر استفاده کنید —"
+        f"بخش: {kind}\n\n— برای پاسخ از دکمه‌های زیر استفاده کنید —"
     )
 
-    # آلبوم؟
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_u2a.get(key, [])
@@ -911,9 +919,7 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
             caption, ents = m.caption or '', m.caption_entities
             for aid in admin_ids:
                 try:
-                    # اول اطلاعات
                     await bot.send_message(aid, info_text, reply_markup=admin_reply_kb(m.from_user.id))
-                    # بعد آلبوم
                     await _send_media_group(bot, aid, items, caption, ents)
                 except Exception:
                     pass
@@ -925,7 +931,6 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         _album_tasks_u2a[key] = asyncio.create_task(_flush())
         return
 
-    # تک‌پیام (همهٔ انواع): اول اطلاعات، بعد کپی پیام
     for aid in admin_ids:
         try:
             await bot.send_message(aid, info_text, reply_markup=admin_reply_kb(m.from_user.id))
@@ -938,17 +943,14 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
     await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
 
 # -------------------- Group behavior & registration --------------------
-# فقط گروه/سوپرگروه
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def group_gate(m: Message):
-    # ثبت/آپدیت گروه
     await upsert_group(
         chat_id=m.chat.id,
         title=getattr(m.chat, "title", None),
         username=getattr(m.chat, "username", None),
         active=True
     )
-    # فقط اگر «مالک» در متن/کپشن باشد، پاسخ بده
     text = (m.text or m.caption or "")
     if contains_malek(text):
         btns = None
@@ -968,11 +970,14 @@ async def group_gate(m: Message):
 @dp.message(F.chat.type == "private")
 async def private_fallback(m: Message, state: FSMContext):
     if await state.get_state():
-        return  # در حالتی مثل Reply/Broadcast/SetRules هستیم؛ مزاحم نشو
+        return
     if not (m.text or "").startswith("/"):
         await m.answer("برای شروع از /menu استفاده کنید.")
 
 # -------------------- Entrypoint --------------------
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
+
 async def main():
     global BOT_USERNAME, DB_POOL
     await init_db()
