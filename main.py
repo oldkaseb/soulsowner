@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS groups (
 
 # Defaults if files are missing
 DEFAULT_RULES: List[Tuple[str, str, str]] = [
-    ("souls", "chat", "قوانین چت گروه Souls: محترمانه باشید و از اسپم خودداری کنید."),
+    ("souls", "chat", "قوانین چت گروه Souls: محترم باشید و از اسپم خودداری کنید."),
     ("souls", "call", "قوانین کال گروه Souls: هماهنگی زمان و رعایت ادب الزامی است."),
     ("bots",  "general", "برای گفت‌وگو درباره ربات‌ها: نام ربات، مشکل/درخواست و اسکرین‌شات را ذکر کنید."),
     ("vserv", "general",
@@ -486,7 +486,7 @@ async def cmd_broadcast(m: Message, state: FSMContext):
     await state.set_state(Broadcast.waiting_for_message)
     await m.answer("پیام/فایل/آلبوم برای *کاربران* را بفرستید. لغو: /cancel")
 
-@dp.message(Broadcast.waiting_for_message))
+@dp.message(Broadcast.waiting_for_message)
 async def on_broadcast_to_users(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
@@ -948,3 +948,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
