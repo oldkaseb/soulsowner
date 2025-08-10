@@ -228,6 +228,13 @@ async def upsert_user_profile(user_id: int, first_name: Optional[str], last_name
             user_id, first_name, last_name, username
         )
 
+async def _auto_delete(chat_id: int, message_id: int, delay: int = 30):
+    await asyncio.sleep(delay)
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass  # دسترسی حذف نداشتیم یا پیام قبلاً پاک شده
+
 async def get_user(user_id: int) -> Optional[User]:
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
@@ -945,10 +952,12 @@ async def group_gate(m: Message):
                     url=f"https://t.me/{BOT_USERNAME}?start=start"
                 )]
             ])
-        await m.reply(
-            "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
-            reply_markup=btns
-        )
+        sent = await m.reply(
+    "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
+    reply_markup=btns
+)
+# فقط پیام ربات پاک شود (پیام کاربر دست‌نخورده می‌ماند)
+asyncio.create_task(_auto_delete(sent.chat.id, sent.message_id, delay=30))
 
 # فقط پی‌وی: فالبک غیر دستوری (وقتی در حالت خاصی نیستیم)
 @dp.message(F.chat.type == "private", F.text, ~F.text.regexp(r"^/"))
@@ -975,4 +984,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
