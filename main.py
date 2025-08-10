@@ -971,12 +971,12 @@ async def group_gate(m: Message):
         )
 
 # فقط پی‌وی: فالبک غیر دستوری — اما اگر در حالت هستیم، دخالت نکند
-@dp.message(F.chat.type == "private")
+@dp.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
 async def private_fallback(m: Message, state: FSMContext):
+    # اگر در حالت خاص FSM هستیم دخالت نکند
     if await state.get_state():
         return
-    if not (m.text or "").startswith("/"):
-        await m.answer("برای شروع از /menu استفاده کنید.")
+    await m.answer("برای شروع از /menu استفاده کنید.")
 
 # -------------------- Entrypoint --------------------
 async def main():
@@ -996,3 +996,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
