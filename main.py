@@ -2,21 +2,13 @@
 """
 Single-file Telegram bot (aiogram v3) with PostgreSQL (asyncpg)
 
-ENV VARS:
+ENV VARS (Railway):
   BOT_TOKEN="..."
   DATABASE_URL="postgresql://user:pass@host:port/dbname"
-Optional:
-  ADMIN_SEED_IDS="123456,987654"   # comma-separated Telegram numeric IDs
+  ADMIN_ID="123456, 987654"    # می‌تواند یک یا چند آیدی باشد (با کاما/فاصله)
 
-Highlights:
-- مدیریت قوانین:
-    /setchat  → قوانین چت گروه
-    /setcall  → قوانین کال گروه
-    /setvserv → قوانین/شرایط خدمات مجازی
-- پیام همگانی /broadcast → ارسال هر نوع پیام + آلبوم (media group) با کپشن
-- آمار /stats، افزودن/حذف ادمین، بلاک/آن‌بلاک، پاسخ به کاربر
-- دکمه «✉️ ارسال پیام مجدد» زیر پاسخ ادمین
-- رفتار گروه: فقط به پیام‌هایی که شامل «مالک» هستند پاسخ می‌دهد؛ سایر پیام‌های گروه نادیده.
+Notes:
+- API_ID و API_HASH برای این کد لازم نیست (مخصوص Pyrogram/Telethon هستند).
 """
 
 import asyncio
@@ -40,6 +32,7 @@ from aiogram.types import (
     InputMediaAnimation,
     InputMediaAudio,
 )
+
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 
@@ -47,23 +40,21 @@ from aiogram.fsm.context import FSMContext
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMIN_SEED_IDS = os.getenv("ADMIN_SEED_IDS", "").strip()
+ADMIN_ID_RAW = os.getenv("ADMIN_ID", os.getenv("ADMIN_SEED_IDS", "")).strip()
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN env var is required")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL env var is required")
 
-# Globals for easy access in handlers
+# Globals
 DB_POOL: Optional[asyncpg.Pool] = None
 BOT_USERNAME: str = ""
 
 # -------------------- Text Constants (fa-IR) --------------------
-WELCOME_TEXT = (
-    "سلام! 👋
-"
-    "به ربات ارتباطی خوش اومدی. یکی از بخش‌ها رو انتخاب کن:"
-)
+WELCOME_TEXT = """سلام! 👋
+به ربات ارتباطی خوش اومدی. یکی از بخش‌ها رو انتخاب کن:"""
+
 MAIN_MENU_TEXT = "یکی از گزینه‌ها را انتخاب کنید:"
 
 # Sections
@@ -92,7 +83,10 @@ class SendToAdmin(StatesGroup):
     waiting_for_text = State()
 
 class Broadcast(StatesGroup):
-    waiting_for_message = State()  # accepts any content incl. albums
+    waiting_for_message = State()  # broadcast to USERS (any content, incl. albums)
+
+class GroupBroadcast(StatesGroup):
+    waiting_for_message = State()  # broadcast to GROUPS (any content, incl. albums)
 
 class AdminReply(StatesGroup):
     waiting_for_text = State()
@@ -129,9 +123,18 @@ CREATE TABLE IF NOT EXISTS msg_log (
     id BIGSERIAL PRIMARY KEY,
     from_user BIGINT NOT NULL,
     to_user   BIGINT,
-    direction TEXT NOT NULL,   -- user_to_admin | admin_to_user | broadcast
+    direction TEXT NOT NULL,   -- user_to_admin | admin_to_user | broadcast | group_broadcast
     content   TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+    chat_id  BIGINT PRIMARY KEY,
+    title    TEXT,
+    username TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
 
@@ -208,6 +211,7 @@ async def init_db():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     async with DB_POOL.acquire() as conn:
         await conn.execute(CREATE_SQL)
+        # default rules
         for section, kind, text in DEFAULT_RULES:
             await conn.execute(
                 """
@@ -217,9 +221,10 @@ async def init_db():
                 """,
                 section, kind, text,
             )
-        if ADMIN_SEED_IDS:
-            ids = [int(x) for x in ADMIN_SEED_IDS.split(',') if x.strip().isdigit()]
-            for uid in ids:
+        # seed admins
+        if ADMIN_ID_RAW:
+            nums = [n for n in ADMIN_ID_RAW.replace(",", " ").split() if n.isdigit()]
+            for uid in map(int, nums):
                 await conn.execute(
                     """
                     INSERT INTO users(user_id, is_admin, blocked)
@@ -303,34 +308,45 @@ async def log_message(from_user: int, to_user: Optional[int], direction: str, co
             from_user, to_user, direction, content,
         )
 
-async def get_stats() -> str:
+# ---- groups table helpers ----
+async def upsert_group(chat_id: int, title: Optional[str], username: Optional[str], active: bool = True):
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
-        total = await conn.fetchval("SELECT COUNT(*) FROM users")
-        blocked = await conn.fetchval("SELECT COUNT(*) FROM users WHERE blocked=TRUE")
-        admins = await conn.fetchval("SELECT COUNT(*) FROM users WHERE is_admin=TRUE")
-        msgs = await conn.fetchval("SELECT COUNT(*) FROM msg_log")
-    return (
-        f"📊 آمار:
-"
-        f"👥 کاربران: {total}
-"
-        f"🚫 بلاک‌شده: {blocked}
-"
-        f"🛡️ ادمین‌ها: {admins}
-"
-        f"✉️ پیام‌ها: {msgs}"
-    )
+        await conn.execute(
+            """
+            INSERT INTO groups(chat_id, title, username, is_active)
+            VALUES($1,$2,$3,$4)
+            ON CONFLICT (chat_id) DO UPDATE
+            SET title=EXCLUDED.title, username=EXCLUDED.username, is_active=EXCLUDED.is_active, updated_at=NOW()
+            """,
+            chat_id, title, username, active
+        )
+
+async def get_group_ids(active_only: bool = True) -> List[int]:
+    assert DB_POOL is not None
+    async with DB_POOL.acquire() as conn:
+        if active_only:
+            rows = await conn.fetch("SELECT chat_id FROM groups WHERE is_active=TRUE")
+        else:
+            rows = await conn.fetch("SELECT chat_id FROM groups")
+    return [r[0] for r in rows]
+
+async def list_groups(limit: int = 50) -> List[Tuple[int, str]]:
+    assert DB_POOL is not None
+    async with DB_POOL.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT chat_id, COALESCE(title, username, chat_id::text) AS name FROM groups WHERE is_active=TRUE ORDER BY updated_at DESC LIMIT $1",
+            limit
+        )
+    return [(r[0], r[1]) for r in rows]
 
 # -------------------- Keyboards --------------------
-
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_SECTION_GROUP, callback_data=f"{CB_SECTION}|group")],
         [InlineKeyboardButton(text=BTN_SECTION_BOTS,  callback_data=f"{CB_SECTION}|bots")],
         [InlineKeyboardButton(text=BTN_SECTION_VSERV, callback_data=f"{CB_SECTION}|vserv")],
     ])
-
 
 def group_submenu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -339,53 +355,28 @@ def group_submenu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
     ])
 
-
 def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_GACTION}|send|{kind}")],
         [InlineKeyboardButton(text=BTN_CANCEL, callback_data=f"{CB_GACTION}|cancel|{kind}")],
     ])
 
-
 def send_again_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_SEND_AGAIN, callback_data=f"{CB_SEND_AGAIN}|start")]
     ])
 
-# -------------------- Helpers --------------------
-async def disable_markup(call: CallbackQuery):
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-async def ensure_not_blocked(user_id: int) -> bool:
-    u = await get_user(user_id)
-    return not (u and u.blocked)
-
-# -------------------- Album Buffer for Broadcast --------------------
+# -------------------- Album Buffers --------------------
 # key: (admin_id, media_group_id)
-_album_buffer: Dict[tuple, List[Dict[str, Any]]] = {}
-_album_tasks: Dict[tuple, asyncio.Task] = {}
+_album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}
+_album_tasks_users: Dict[tuple, asyncio.Task] = {}
+
+_album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}
+_album_tasks_groups: Dict[tuple, asyncio.Task] = {}
 
 # -------------------- Bot Setup --------------------
 bot = Bot(BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
-
-@dp.startup()
-async def on_startup(_: Dispatcher):
-    global BOT_USERNAME
-    await init_db()
-    me = await bot.get_me()
-    BOT_USERNAME = me.username or ""
-    logging.info("Bot started as @%s", BOT_USERNAME)
-
-@dp.shutdown()
-async def on_shutdown(_: Dispatcher):
-    global DB_POOL
-    if DB_POOL:
-        await DB_POOL.close()
-        logging.info("DB pool closed.")
 
 # -------------------- Public Commands (Private only) --------------------
 @dp.message(Command("start"))
@@ -393,7 +384,8 @@ async def cmd_start(m: Message, state: FSMContext):
     if m.chat.type != "private":
         return
     await upsert_user(m)
-    if not await ensure_not_blocked(m.from_user.id):
+    u = await get_user(m.from_user.id)
+    if u and u.blocked:
         return await m.answer("شما مسدود شده‌اید.")
     await state.clear()
     await m.answer(WELCOME_TEXT, reply_markup=main_menu_kb())
@@ -410,37 +402,25 @@ async def cmd_help(m: Message):
     if m.chat.type != "private":
         return
     text = (
-        "دستورات کاربری:
-"
-        "/start /menu /help
-
-"
-        "دستورات ادمین:
-"
-        "/broadcast – پیام همگانی (همۀ انواع فایل/آلبوم)
-"
-        "/stats – آمار دقیق
-"
-        "/addadmin <user_id> – افزودن ادمین
-"
-        "/deladmin <user_id> – حذف ادمین
-"
-        "/block <user_id> – بلاک
-"
-        "/unblock <user_id> – آنبلاک
-"
-        "/setchat – تغییر قوانین چت گروه
-"
-        "/setcall – تغییر قوانین کال گروه
-"
-        "/setvserv – ست‌کردن قوانین خدمات مجازی
-"
-        "/reply <user_id> – پاسخ به کاربر
-"
+        "دستورات کاربری:\n"
+        "/start /menu /help\n\n"
+        "دستورات ادمین:\n"
+        "/broadcast – پیام همگانی به کاربران (همۀ انواع فایل/آلبوم)\n"
+        "/groupsend – پیام به تمام گروه‌ها (همۀ انواع فایل/آلبوم)\n"
+        "/listgroups – لیست گروه‌های ثبت‌شده\n"
+        "/stats – آمار دقیق\n"
+        "/addadmin <user_id> – افزودن ادمین\n"
+        "/deladmin <user_id> – حذف ادمین\n"
+        "/block <user_id> – بلاک\n"
+        "/unblock <user_id> – آنبلاک\n"
+        "/setchat – تغییر قوانین چت گروه\n"
+        "/setcall – تغییر قوانین کال گروه\n"
+        "/setvserv – ست‌کردن قوانین خدمات مجازی\n"
+        "/reply <user_id> – پاسخ به کاربر\n"
     )
     await m.answer(text)
 
-# -------------------- Admin Guards --------------------
+# -------------------- Admin Guard --------------------
 async def require_admin(message: Message) -> bool:
     u = await get_user(message.from_user.id)
     if not (u and u.is_admin):
@@ -448,7 +428,7 @@ async def require_admin(message: Message) -> bool:
         return False
     return True
 
-# -------------------- Admin Commands (Private only) --------------------
+# -------------------- Admin Commands: Users Broadcast --------------------
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(m: Message, state: FSMContext):
     if m.chat.type != "private":
@@ -456,15 +436,169 @@ async def cmd_broadcast(m: Message, state: FSMContext):
     if not await require_admin(m):
         return
     await state.set_state(Broadcast.waiting_for_message)
-    await m.answer("پیام/فایل/آلبوم مورد نظر برای ارسال همگانی را بفرستید. لغو: /cancel")
+    await m.answer("پیام/فایل/آلبوم مورد نظر برای ارسال همگانی به *کاربران* را بفرستید. لغو: /cancel")
 
+async def _send_media_group_to_chats(chat_ids: List[int], items: List[Dict[str, Any]], caption, caption_entities):
+    sent = 0
+    for cid in chat_ids:
+        try:
+            media = []
+            first = True
+            for it in items:
+                if it['type'] == 'photo':
+                    media.append(InputMediaPhoto(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'video':
+                    media.append(InputMediaVideo(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'document':
+                    media.append(InputMediaDocument(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'animation':
+                    media.append(InputMediaAnimation(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'audio':
+                    media.append(InputMediaAudio(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                first = False
+            await bot.send_media_group(cid, media)
+            sent += 1
+        except Exception:
+            continue
+    return sent
+
+@dp.message(Broadcast.waiting_for_message)
+async def on_broadcast_to_users(m: Message, state: FSMContext):
+    if m.chat.type != "private" or not await require_admin(m):
+        return
+
+    # Handle albums
+    if m.media_group_id:
+        key = (m.from_user.id, m.media_group_id)
+        buf = _album_buffer_users.get(key, [])
+        item = None
+        if m.photo:    item = {'type': 'photo', 'file_id': m.photo[-1].file_id}
+        elif m.video:  item = {'type': 'video', 'file_id': m.video.file_id}
+        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
+        elif m.animation: item = {'type': 'animation', 'file_id': m.animation.file_id}
+        elif m.audio:  item = {'type': 'audio', 'file_id': m.audio.file_id}
+        if item:
+            buf.append(item)
+            _album_buffer_users[key] = buf
+
+        async def _flush():
+            await asyncio.sleep(2)
+            items = _album_buffer_users.pop(key, [])
+            caption = m.caption or ''
+            caption_entities = m.caption_entities
+            # recipients: users (not blocked)
+            assert DB_POOL is not None
+            async with DB_POOL.acquire() as conn:
+                rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
+            chat_ids = [r[0] for r in rows]
+            sent = await _send_media_group_to_chats(chat_ids, items, caption, caption_entities)
+            await state.clear()
+            await m.answer(f"✅ آلبوم برای {sent} کاربر ارسال شد.")
+
+        t = _album_tasks_users.get(key)
+        if t and not t.done():
+            t.cancel()
+        _album_tasks_users[key] = asyncio.create_task(_flush())
+        return
+
+    # Single message copy
+    assert DB_POOL is not None
+    async with DB_POOL.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
+    recipients = [r[0] for r in rows]
+    sent = 0
+    for uid in recipients:
+        try:
+            await bot.copy_message(chat_id=uid, from_chat_id=m.chat.id, message_id=m.message_id)
+            await log_message(m.from_user.id, uid, "broadcast", m.caption or m.text or m.content_type)
+            sent += 1
+        except Exception:
+            continue
+    await state.clear()
+    await m.answer(f"✅ ارسال شد برای {sent} کاربر.")
+
+# -------------------- Admin Commands: GROUPS Broadcast --------------------
+@dp.message(Command("groupsend"))
+async def cmd_groupsend(m: Message, state: FSMContext):
+    if m.chat.type != "private":
+        return
+    if not await require_admin(m):
+        return
+    await state.set_state(GroupBroadcast.waiting_for_message)
+    await m.answer("پیام/فایل/آلبوم مورد نظر برای ارسال به *همه گروه‌ها* را بفرستید. لغو: /cancel")
+
+@dp.message(GroupBroadcast.waiting_for_message)
+async def on_broadcast_to_groups(m: Message, state: FSMContext):
+    if m.chat.type != "private" or not await require_admin(m):
+        return
+
+    # Albums
+    if m.media_group_id:
+        key = (m.from_user.id, m.media_group_id)
+        buf = _album_buffer_groups.get(key, [])
+        item = None
+        if m.photo:    item = {'type': 'photo', 'file_id': m.photo[-1].file_id}
+        elif m.video:  item = {'type': 'video', 'file_id': m.video.file_id}
+        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
+        elif m.animation: item = {'type': 'animation', 'file_id': m.animation.file_id}
+        elif m.audio:  item = {'type': 'audio', 'file_id': m.audio.file_id}
+        if item:
+            buf.append(item)
+            _album_buffer_groups[key] = buf
+
+        async def _flush():
+            await asyncio.sleep(2)
+            items = _album_buffer_groups.pop(key, [])
+            caption = m.caption or ''
+            caption_entities = m.caption_entities
+            chat_ids = await get_group_ids(active_only=True)
+            sent = await _send_media_group_to_chats(chat_ids, items, caption, caption_entities)
+            await state.clear()
+            await m.answer(f"✅ آلبوم برای {sent} گروه ارسال شد.")
+
+        t = _album_tasks_groups.get(key)
+        if t and not t.done():
+            t.cancel()
+        _album_tasks_groups[key] = asyncio.create_task(_flush())
+        return
+
+    # Single message copy to each group
+    chat_ids = await get_group_ids(active_only=True)
+    sent = 0
+    for gid in chat_ids:
+        try:
+            await bot.copy_message(chat_id=gid, from_chat_id=m.chat.id, message_id=m.message_id)
+            await log_message(m.from_user.id, gid, "group_broadcast", m.caption or m.text or m.content_type)
+            sent += 1
+        except Exception:
+            continue
+    await state.clear()
+    await m.answer(f"✅ ارسال شد برای {sent} گروه.")
+
+@dp.message(Command("listgroups"))
+async def cmd_listgroups(m: Message):
+    if m.chat.type != "private":
+        return
+    if not await require_admin(m):
+        return
+    items = await list_groups(limit=50)
+    if not items:
+        return await m.answer("هیچ گروه فعالی ثبت نشده است.")
+    lines = [f"• {name} — <code>{cid}</code>" for cid, name in items]
+    await m.answer("گروه‌های ثبت‌شده (تا ۵۰ مورد اخیر):\n" + "\n".join(lines))
+
+# -------------------- Admin Commands: misc --------------------
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
     if m.chat.type != "private":
         return
     if not await require_admin(m):
         return
-    await m.answer(await get_stats())
+    assert DB_POOL is not None
+    async with DB_POOL.acquire() as conn:
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+        total_groups = await conn.fetchval("SELECT COUNT(*) FROM groups WHERE is_active=TRUE")
+    await m.answer(f"📊 کاربران: {total_users}\n👥 گروه‌های فعال: {total_groups}")
 
 @dp.message(Command("addadmin"))
 async def cmd_addadmin(m: Message, command: CommandObject):
@@ -530,8 +664,7 @@ async def cmd_setrules(m: Message, state: FSMContext, command: CommandObject):
     if not await require_admin(m):
         return
     if not command.args:
-        return await m.answer("فرمت: /setrules <section> <kind> ==> سپس متن قوانین را بفرستید.
-مثال: /setrules group chat")
+        return await m.answer("فرمت: /setrules <section> <kind> ==> سپس متن قوانین را بفرستید.\nمثال: /setrules group chat")
     args = command.args.strip().split()
     if len(args) != 2:
         return await m.answer("باید دقیقا دو آرگومان بدهید: section و kind. مثال: group chat")
@@ -579,107 +712,15 @@ async def cmd_cancel(m: Message, state: FSMContext):
     await state.clear()
     await m.answer("لغو شد.")
 
-# -------------------- State Handlers (Private) --------------------
-async def _send_media_group_to_all(items: List[Dict[str, Any]], caption, caption_entities, sender_id):
-    assert DB_POOL is not None
-    async with DB_POOL.acquire() as conn:
-        rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
-    recipients = [r[0] for r in rows]
-    sent = 0
-    for uid in recipients:
-        try:
-            media = []
-            first = True
-            for it in items:
-                if it['type'] == 'photo':
-                    media.append(InputMediaPhoto(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'video':
-                    media.append(InputMediaVideo(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'document':
-                    media.append(InputMediaDocument(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'animation':
-                    media.append(InputMediaAnimation(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'audio':
-                    media.append(InputMediaAudio(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                first = False
-            await bot.send_media_group(uid, media)
-            sent += 1
-        except Exception:
-            continue
-    return sent
-
-@dp.message(Broadcast.waiting_for_message)
-async def on_broadcast_any(m: Message, state: FSMContext):
-    if m.chat.type != "private":
-        return
-    if not await require_admin(m):
-        return
-
-    # Album (media group)
-    if m.media_group_id:
-        key = (m.from_user.id, m.media_group_id)
-        buf = _album_buffer.get(key, [])
-        item = None
-        if m.photo:
-            item = {'type': 'photo', 'file_id': m.photo[-1].file_id}
-        elif m.video:
-            item = {'type': 'video', 'file_id': m.video.file_id}
-        elif m.document:
-            item = {'type': 'document', 'file_id': m.document.file_id}
-        elif m.animation:
-            item = {'type': 'animation', 'file_id': m.animation.file_id}
-        elif m.audio:
-            item = {'type': 'audio', 'file_id': m.audio.file_id}
-        if item:
-            buf.append(item)
-            _album_buffer[key] = buf
-
-        async def _flush_album():
-            await asyncio.sleep(2)  # wait for rest of album
-            items = _album_buffer.pop(key, [])
-            caption = m.caption or ''
-            caption_entities = m.caption_entities
-            sent = await _send_media_group_to_all(items, caption, caption_entities, m.from_user.id)
-            await state.clear()
-            try:
-                await m.answer(f"✅ آلبوم برای {sent} نفر ارسال شد.")
-            except Exception:
-                pass
-
-        t = _album_tasks.get(key)
-        if t and not t.done():
-            t.cancel()
-        _album_tasks[key] = asyncio.create_task(_flush_album())
-        return
-
-    # Single message (any type) – preserves caption/files
-    assert DB_POOL is not None
-    async with DB_POOL.acquire() as conn:
-        rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
-    recipients = [r[0] for r in rows]
-    sent = 0
-    for uid in recipients:
-        try:
-            await bot.copy_message(chat_id=uid, from_chat_id=m.chat.id, message_id=m.message_id)
-            await log_message(m.from_user.id, uid, "broadcast", m.caption or m.text or m.content_type)
-            sent += 1
-        except Exception:
-            continue
-    await state.clear()
-    await m.answer(f"✅ ارسال شد برای {sent} نفر.")
-
+# -------------------- States Handlers --------------------
 @dp.message(AdminReply.waiting_for_text)
 async def on_admin_reply(m: Message, state: FSMContext):
-    if m.chat.type != "private":
-        return
-    if not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin(m):
         return
     data = await state.get_data()
     target_id = int(data.get("target_id"))
     try:
-        await bot.send_message(target_id, f"پاسخ ادمین:
-
-{m.html_text}", reply_markup=send_again_kb())
+        await bot.send_message(target_id, f"پاسخ ادمین:\n\n{m.html_text}", reply_markup=send_again_kb())
         await log_message(m.from_user.id, target_id, "admin_to_user", m.html_text)
         await m.answer("✅ ارسال شد.")
     except Exception:
@@ -688,160 +729,49 @@ async def on_admin_reply(m: Message, state: FSMContext):
 
 @dp.message(SetRules.waiting_for_text)
 async def on_set_rules_text(m: Message, state: FSMContext):
-    if m.chat.type != "private":
-        return
-    if not await require_admin(m):
+    if m.chat.type != "private" or not await require_admin(m):
         return
     data = await state.get_data()
-    section = data.get("section")
-    kind = data.get("kind")
-    await set_rules(section, kind, m.html_text)
+    await set_rules(data["section"], data["kind"], m.html_text)
     await state.clear()
     await m.answer("✅ قوانین ذخیره شد.")
 
-# -------------------- Callback Query Handlers (Private only) --------------------
-@dp.callback_query(F.data.startswith(f"{CB_MAIN}|"))
-async def on_main_nav(call: CallbackQuery, state: FSMContext):
-    if call.message.chat.type != "private":
-        return
-    await disable_markup(call)
-    await state.clear()
-    await call.message.answer(MAIN_MENU_TEXT, reply_markup=main_menu_kb())
-    await call.answer()
-
-@dp.callback_query(F.data.startswith(f"{CB_SECTION}|"))
-async def on_section(call: CallbackQuery):
-    if call.message.chat.type != "private":
-        return
-    if not await ensure_not_blocked(call.from_user.id):
-        await call.answer("مسدود شده‌اید.", show_alert=True)
-        return
-    await disable_markup(call)
-
-    _, section = call.data.split("|", 1)
-    if section == "group":
-        await call.message.answer("بخش گروه – نوع درخواست را انتخاب کنید:", reply_markup=group_submenu_kb())
-    elif section == "bots":
-        rules = await get_rules("bots", "general")
-        await call.message.answer(rules, reply_markup=after_rules_kb("general"))
-    elif section == "vserv":
-        rules = await get_rules("vserv", "general")
-        await call.message.answer(rules, reply_markup=after_rules_kb("general"))
-    await call.answer()
-
-@dp.callback_query(F.data.startswith(f"{CB_GSUB}|"))
-async def on_group_sub(call: CallbackQuery):
-    if call.message.chat.type != "private":
-        return
-    if not await ensure_not_blocked(call.from_user.id):
-        await call.answer("مسدود شده‌اید.", show_alert=True)
-        return
-    await disable_markup(call)
-
-    _, kind = call.data.split("|", 1)  # chat or call
-    rules = await get_rules("group", kind)
-    await call.message.answer(rules, reply_markup=after_rules_kb(kind))
-    await call.answer()
-
-@dp.callback_query(F.data.startswith(f"{CB_GACTION}|"))
-async def on_group_action(call: CallbackQuery, state: FSMContext):
-    if call.message.chat.type != "private":
-        return
-    if not await ensure_not_blocked(call.from_user.id):
-        await call.answer("مسدود شده‌اید.", show_alert=True)
-        return
-
-    await disable_markup(call)
-    _, action, kind = call.data.split("|", 2)
-    if action == "send":
-        await state.set_state(SendToAdmin.waiting_for_text)
-        await state.update_data(kind=kind)
-        await call.message.answer("لطفاً متن درخواست خود را ارسال کنید. لغو: /cancel")
-    else:
-        await state.clear()
-        await call.message.answer("لغو شد.")
-    await call.answer()
-
-@dp.callback_query(F.data.startswith(f"{CB_SEND_AGAIN}|"))
-async def on_send_again(call: CallbackQuery, state: FSMContext):
-    if call.message.chat.type != "private":
-        return
-    if not await ensure_not_blocked(call.from_user.id):
-        await call.answer("مسدود شده‌اید.", show_alert=True)
-        return
-
-    await disable_markup(call)
-    await state.set_state(SendToAdmin.waiting_for_text)
-    await call.message.answer("متن جدید را بفرستید. لغو: /cancel")
-    await call.answer()
-
-# -------------------- User-to-Admin Flow (Private only) --------------------
-@dp.message(SendToAdmin.waiting_for_text)
-async def on_user_message_to_admin(m: Message, state: FSMContext):
-    if m.chat.type != "private":
-        return
-    if not await ensure_not_blocked(m.from_user.id):
-        return await m.answer("شما مسدود شده‌اید.")
-
-    data = await state.get_data()
-    kind = data.get("kind", "general")
-    admin_ids = await get_admin_ids()
-    if not admin_ids:
-        await m.answer("فعلاً ادمینی ثبت نشده.")
-        return
-
-    preview = (
-        f"📬 درخواست جدید از <code>{m.from_user.id}</code>
-"
-        f"نوع: {kind}
-
-"
-        f"{m.html_text}
-
-"
-        f"برای پاسخ: /reply {m.from_user.id}"
-    )
-
-    sent_to = 0
-    for aid in admin_ids:
-        try:
-            await bot.send_message(aid, preview)
-            sent_to += 1
-        except Exception:
-            pass
-
-    await log_message(m.from_user.id, None, "user_to_admin", m.html_text)
-    await state.clear()
-    if sent_to:
-        await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
-    else:
-        await m.answer("❌ هیچ ادمینی در دسترس نیست.")
-
-# -------------------- Group Behavior --------------------
-# فقط وقتی پیام شامل «مالک» باشد، در گروه جواب می‌دهیم؛ بقیه سکوت.
+# -------------------- Group Behavior + Registration --------------------
 @dp.message()
 async def group_gate(m: Message):
-    if m.chat.type == "private":
-        # پیام‌های آزاد در پی‌وی؛ اگر دستور نیست، راهنمای کوتاه:
-        if not (m.text or "").startswith("/"):
-            await m.answer("برای شروع از /menu استفاده کنید.")
-        return
-
+    # ثبت گروه‌ها به‌محض دریافت هر پیام از گروه
     if m.chat.type in ("group", "supergroup"):
+        await upsert_group(
+            chat_id=m.chat.id,
+            title=getattr(m.chat, "title", None),
+            username=getattr(m.chat, "username", None),
+            active=True
+        )
         text = (m.text or m.caption or "")
         if "مالک" in text:
             btns = None
             if BOT_USERNAME:
-                btns = InlineKeyboardMarkup(inline_keyboard=[[ 
-                    [InlineKeyboardButton(text="شروع گفتگو در پی‌وی", url=f"https://t.me/{BOT_USERNAME}?start=start")] 
-                ]])
+                btns = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="شروع گفتگو در پی‌وی", url=f"https://t.me/{BOT_USERNAME}?start=start")]
+                ])
             await m.reply("سلام! برای ارتباط مستقیم، لطفاً به پی‌وی ربات پیام بدید. 👇", reply_markup=btns)
-        # اگر «مالک» نباشد، هیچ پاسخی نده.
         return
+
+    # در پی‌وی اگر پیام دستور نبود، یک راهنما بده
+    if m.chat.type == "private" and not (m.text or "").startswith("/"):
+        await m.answer("برای شروع از /menu استفاده کنید.")
 
 # -------------------- Entrypoint --------------------
 async def main():
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+    global BOT_USERNAME, DB_POOL
+    await init_db()
+    me = await bot.get_me()
+    BOT_USERNAME = me.username or ""
+    try:
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+    finally:
+        if DB_POOL:
+            await DB_POOL.close()
 
 if __name__ == "__main__":
     try:
