@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Telegram Bot – aiogram v3 + asyncpg (single file)
+Telegram Bot – aiogram v3.7 + asyncpg (single file)
 
 ENV (Railway):
   BOT_TOKEN="..."
   DATABASE_URL="postgresql://user:pass@host:port/dbname"
   ADMIN_ID="123456, 987654"  # یک یا چند آیدی با کاما/فاصله
-
-نکته: API_ID و API_HASH استفاده نمی‌شوند (برای Pyrogram هستند).
 """
 
 import asyncio
@@ -56,7 +54,7 @@ WELCOME_TEXT = """سلام! 👋
 یکی از بخش‌ها را انتخاب کنید تا دقیق‌تر بفهمم چه کاری دارید:"""
 MAIN_MENU_TEXT = "یکی از گزینه‌ها را انتخاب کنید:"
 
-# Buttons (fa-IR)
+# Buttons
 BTN_SECTION_BOTS  = "🤖 گفت‌وگو درباره ربات‌ها"
 BTN_SECTION_SOULS = "💬 گروه Souls"
 BTN_SECTION_VSERV = "🛍️ خدمات مجازی"
@@ -69,12 +67,16 @@ BTN_CANCEL       = "❌ انصراف"
 BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"
 BTN_QUICK_SEND   = "✉️ ارسال پیام"               # برای bots/vserv
 
+BTN_REPLY        = "✉️ پاسخ"
+BTN_REPLY_AGAIN  = "✉️ پاسخِ مجدد"
+
 # Callback data prefixes
-CB_MAIN   = "main"
-CB_SEC    = "sec"     # sec|bots / sec|souls / sec|vserv
-CB_SOULS  = "souls"   # souls|chat / souls|call
-CB_ACTION = "act"     # act|send|<kind> or act|cancel|<kind>
-CB_AGAIN  = "again"   # again|start
+CB_MAIN    = "main"
+CB_SEC     = "sec"      # sec|bots / sec|souls / sec|vserv
+CB_SOULS   = "souls"    # souls|chat / souls|call
+CB_ACTION  = "act"      # act|send|<kind> or act|cancel|<kind>
+CB_AGAIN   = "again"    # again|start
+CB_REPLY   = "reply"    # reply|<user_id>
 
 # -------------------- FSM --------------------
 class SendToAdmin(StatesGroup):
@@ -87,7 +89,7 @@ class GroupBroadcast(StatesGroup):  # به گروه‌ها
     waiting_for_message = State()
 
 class AdminReply(StatesGroup):
-    waiting_for_text = State()
+    waiting_for_any = State()
 
 class SetRules(StatesGroup):
     waiting_for_text = State()
@@ -141,8 +143,20 @@ DEFAULT_RULES: List[Tuple[str, str, str]] = [
     ("souls", "chat", "قوانین چت گروه Souls: محترمانه باشید و از اسپم خودداری کنید."),
     ("souls", "call", "قوانین کال گروه Souls: هماهنگی زمان و رعایت ادب الزامی است."),
     ("bots",  "general", "برای گفت‌وگو درباره ربات‌ها: نام ربات، مشکل/درخواست و اسکرین‌شات را ذکر کنید."),
-    ("vserv", "general", "برای خدمات مجازی: نوع سرویس، جزئیات و زمان‌بندی را بنویسید."),
+    ("vserv", "general",
+     "لطفاً قبل از سفارش، نوع سرویس، جزئیات و زمان‌بندی را واضح بنویسید."),
 ]
+
+VIRTUAL_SERVICES_LIST = (
+    "🔹 فروش سرویس تلگرام پریمیوم گیفتی (بدون ورود به اکانت)\n"
+    "🔹 پخش لینک در پیوی (سندر)\n"
+    "🔹 ممبر فیک تضمینی\n"
+    "🔹 ممبر واقعی آپلودری اخلاقی و غیراخلاقی\n"
+    "🔹 ویو و ری‌اکت کانال\n"
+    "🔹 ربات امنیت و موزیک\n"
+    "🔹 ساخت و استارت انواع ربات‌ها\n"
+    "🔹 انواع خدمات سایر اپلیکیشن‌ها"
+)
 
 async def init_db():
     """Create tables, seed rules & admins, and read local rules files if exist."""
@@ -313,14 +327,14 @@ def souls_submenu_kb() -> InlineKeyboardMarkup:
     ])
 
 def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
-    # فقط برای Souls استفاده می‌شود (پذیرش قوانین)
+    # فقط برای Souls: پذیرش قوانین
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_ACTION}|send|{kind}")],
         [InlineKeyboardButton(text=BTN_CANCEL,       callback_data=f"{CB_ACTION}|cancel|{kind}")],
     ])
 
 def quick_send_kb(kind: str) -> InlineKeyboardMarkup:
-    # برای bots/vserv: فقط ارسال پیام، بدون پذیرش قوانین
+    # برای bots/vserv: ارسال پیام مستقیم
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_QUICK_SEND, callback_data=f"{CB_ACTION}|send|{kind}")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
@@ -329,6 +343,12 @@ def quick_send_kb(kind: str) -> InlineKeyboardMarkup:
 def send_again_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_SEND_AGAIN, callback_data=f"{CB_AGAIN}|start")]
+    ])
+
+def admin_reply_kb(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=BTN_REPLY,       callback_data=f"{CB_REPLY}|{user_id}")],
+        [InlineKeyboardButton(text=BTN_REPLY_AGAIN, callback_data=f"{CB_REPLY}|{user_id}")],
     ])
 
 # -------------------- Helpers --------------------
@@ -356,34 +376,46 @@ async def require_admin(message: Message) -> bool:
     return True
 
 # -------------------- Album helpers --------------------
-_album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}
+_album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}         # برای broadcast به کاربران
 _album_tasks_users: Dict[tuple, asyncio.Task] = {}
-_album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}
+_album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}        # برای broadcast به گروه‌ها
 _album_tasks_groups: Dict[tuple, asyncio.Task] = {}
 
-async def _send_media_group_to_chats(bot: Bot, chat_ids: List[int], items: List[Dict[str, Any]], caption, caption_entities):
-    sent = 0
-    for cid in chat_ids:
-        try:
-            media = []
-            first = True
-            for it in items:
-                if it['type'] == 'photo':
-                    media.append(InputMediaPhoto(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'video':
-                    media.append(InputMediaVideo(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'document':
-                    media.append(InputMediaDocument(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'animation':
-                    media.append(InputMediaAnimation(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'audio':
-                    media.append(InputMediaAudio(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                first = False
-            await bot.send_media_group(cid, media)
-            sent += 1
-        except Exception:
-            continue
-    return sent
+_album_buffer_u2a: Dict[tuple, List[Dict[str, Any]]] = {}           # user -> admin
+_album_tasks_u2a: Dict[tuple, asyncio.Task] = {}
+
+_album_buffer_admin_reply: Dict[tuple, List[Dict[str, Any]]] = {}   # admin -> user
+_album_tasks_admin_reply: Dict[tuple, asyncio.Task] = {}
+
+def _collect_item_from_message(m: Message) -> Optional[Dict[str, Any]]:
+    if m.photo:
+        return {'type': 'photo', 'file_id': m.photo[-1].file_id}
+    if m.video:
+        return {'type': 'video', 'file_id': m.video.file_id}
+    if m.document:
+        return {'type': 'document', 'file_id': m.document.file_id}
+    if m.animation:
+        return {'type': 'animation', 'file_id': m.animation.file_id}
+    if m.audio:
+        return {'type': 'audio', 'file_id': m.audio.file_id}
+    return None
+
+async def _send_media_group(bot: Bot, chat_id: int, items: List[Dict[str, Any]], caption, caption_entities):
+    media = []
+    first = True
+    for it in items:
+        if it['type'] == 'photo':
+            media.append(InputMediaPhoto(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+        elif it['type'] == 'video':
+            media.append(InputMediaVideo(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+        elif it['type'] == 'document':
+            media.append(InputMediaDocument(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+        elif it['type'] == 'animation':
+            media.append(InputMediaAnimation(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+        elif it['type'] == 'audio':
+            media.append(InputMediaAudio(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+        first = False
+    await bot.send_media_group(chat_id, media)
 
 # -------------------- Bot --------------------
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -436,12 +468,13 @@ async def cmd_adminhelp(m: Message):
         "/deladmin <id> – حذف ادمین\n"
         "/block <id> – بلاک کاربر\n"
         "/unblock <id> – آنبلاک کاربر\n"
-        "/reply <user_id> – پاسخ مستقیم به کاربر\n"
-        "/setchat – تغییر قوانین «چت Souls» از داخل ربات\n"
-        "/setcall – تغییر قوانین «کال Souls» از داخل ربات\n"
+        "/reply <user_id> – پاسخ مستقیم به کاربر (همۀ انواع پیام)\n"
+        "/setchat – تغییر قوانین «چت Souls»\n"
+        "/setcall – تغییر قوانین «کال Souls»\n"
         "/setvserv – ست کردن قوانین خدمات مجازی\n"
         "/setrules <section> <kind> – ست دلخواه قوانین (souls|bots|vserv + chat|call|general)\n"
-        "/cancel – لغو حالت‌ها\n"
+        "/cancel – لغو حالت‌ها\n\n"
+        "نکته: در پیام‌های دریافتی از کاربران، دکمهٔ «✉️ پاسخ» را هم می‌توانید بزنید."
     )
     await m.answer(text)
 
@@ -453,21 +486,14 @@ async def cmd_broadcast(m: Message, state: FSMContext):
     await state.set_state(Broadcast.waiting_for_message)
     await m.answer("پیام/فایل/آلبوم برای *کاربران* را بفرستید. لغو: /cancel")
 
-@dp.message(Broadcast.waiting_for_message)
+@dp.message(Broadcast.waiting_for_message))
 async def on_broadcast_to_users(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
-
-    # آلبوم
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_users.get(key, [])
-        item = None
-        if m.photo:      item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
-        elif m.video:    item = {'type': 'video',    'file_id': m.video.file_id}
-        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
-        elif m.animation:item = {'type': 'animation','file_id': m.animation.file_id}
-        elif m.audio:    item = {'type': 'audio',    'file_id': m.audio.file_id}
+        item = _collect_item_from_message(m)
         if item:
             buf.append(item); _album_buffer_users[key] = buf
 
@@ -479,7 +505,12 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
             async with DB_POOL.acquire() as conn:
                 rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
             chat_ids = [r[0] for r in rows]
-            sent = await _send_media_group_to_chats(bot, chat_ids, items, caption, ents)
+            sent = 0
+            for uid in chat_ids:
+                try:
+                    await _send_media_group(bot, uid, items, caption, ents)
+                    sent += 1
+                except Exception: pass
             await state.clear()
             await m.answer(f"✅ آلبوم برای {sent} کاربر ارسال شد.")
         t = _album_tasks_users.get(key)
@@ -487,7 +518,7 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
         _album_tasks_users[key] = asyncio.create_task(_flush())
         return
 
-    # تک پیام
+    # single
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
@@ -515,17 +546,10 @@ async def cmd_groupsend(m: Message, state: FSMContext):
 async def on_broadcast_to_groups(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
-
-    # آلبوم
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_groups.get(key, [])
-        item = None
-        if m.photo:      item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
-        elif m.video:    item = {'type': 'video',    'file_id': m.video.file_id}
-        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
-        elif m.animation:item = {'type': 'animation','file_id': m.animation.file_id}
-        elif m.audio:    item = {'type': 'audio',    'file_id': m.audio.file_id}
+        item = _collect_item_from_message(m)
         if item:
             buf.append(item); _album_buffer_groups[key] = buf
 
@@ -534,7 +558,12 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
             items = _album_buffer_groups.pop(key, [])
             caption, ents = m.caption or '', m.caption_entities
             chat_ids = await get_group_ids(active_only=True)
-            sent = await _send_media_group_to_chats(bot, chat_ids, items, caption, ents)
+            sent = 0
+            for gid in chat_ids:
+                try:
+                    await _send_media_group(bot, gid, items, caption, ents)
+                    sent += 1
+                except Exception: pass
             await state.clear()
             await m.answer(f"✅ آلبوم برای {sent} گروه ارسال شد.")
         t = _album_tasks_groups.get(key)
@@ -542,7 +571,6 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
         _album_tasks_groups[key] = asyncio.create_task(_flush())
         return
 
-    # تک پیام
     chat_ids = await get_group_ids(active_only=True)
     sent = 0
     for gid in chat_ids:
@@ -618,19 +646,55 @@ async def cmd_reply(m: Message, state: FSMContext, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         return await m.answer("فرمت: /reply <user_id>")
     target_id = int(command.args.strip())
-    await state.set_state(AdminReply.waiting_for_text)
+    await state.set_state(AdminReply.waiting_for_any)
     await state.update_data(target_id=target_id)
-    await m.answer(f"متن پاسخ برای کاربر {target_id} را بفرستید. لغو: /cancel")
+    await m.answer(f"متن یا فایل/آلبومِ پاسخ برای کاربر {target_id} را بفرستید. لغو: /cancel")
 
-@dp.message(AdminReply.waiting_for_text)
-async def on_admin_reply(m: Message, state: FSMContext):
+# inline reply (buttons)
+@dp.callback_query(F.data.startswith(f"{CB_REPLY}|"))
+async def cb_reply(call: CallbackQuery, state: FSMContext):
+    if call.message.chat.type != "private":
+        return
+    if not await require_admin(call.message):
+        return
+    _, uid = call.data.split("|", 1)
+    await state.set_state(AdminReply.waiting_for_any)
+    await state.update_data(target_id=int(uid))
+    await call.message.answer(f"در حال پاسخ به کاربر {uid}. لطفاً پیام/فایل/آلبوم را بفرستید. لغو: /cancel")
+    await call.answer()
+    await disable_markup(call)
+
+@dp.message(AdminReply.waiting_for_any)
+async def on_admin_reply_any(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
     data = await state.get_data()
     target_id = int(data.get("target_id"))
+
+    # آلبوم
+    if m.media_group_id:
+        key = (m.from_user.id, target_id, m.media_group_id)
+        buf = _album_buffer_admin_reply.get(key, [])
+        item = _collect_item_from_message(m)
+        if item:
+            buf.append(item); _album_buffer_admin_reply[key] = buf
+
+        async def _flush():
+            await asyncio.sleep(2)
+            items = _album_buffer_admin_reply.pop(key, [])
+            await _send_media_group(bot, target_id, items, m.caption or '', m.caption_entities)
+            await log_message(m.from_user.id, target_id, "admin_to_user", f"album({len(items)})")
+            await m.answer("✅ آلبوم برای کاربر ارسال شد.")
+            await state.clear()
+        t = _album_tasks_admin_reply.get(key)
+        if t and not t.done(): t.cancel()
+        _album_tasks_admin_reply[key] = asyncio.create_task(_flush())
+        return
+
+    # تک‌پیام (همهٔ انواع)
     try:
-        await bot.send_message(target_id, f"پاسخ ادمین:\n\n{m.html_text}", reply_markup=send_again_kb())
-        await log_message(m.from_user.id, target_id, "admin_to_user", m.html_text)
+        await bot.copy_message(chat_id=target_id, from_chat_id=m.chat.id, message_id=m.message_id)
+        await log_message(m.from_user.id, target_id, "admin_to_user", m.caption or m.text or m.content_type)
         await m.answer("✅ ارسال شد.")
     except Exception:
         await m.answer("❌ ارسال نشد. شاید کاربر پیوی ربات را باز نکرده.")
@@ -713,19 +777,25 @@ async def on_section(call: CallbackQuery):
     if section == "souls":
         # فقط Souls → پذیرش قوانین
         await call.message.answer("بخش گروه Souls – نوع درخواست را انتخاب کنید:", reply_markup=souls_submenu_kb())
+
     elif section == "bots":
-        # bots → ارسال پیام مستقیم
         rules = await get_rules("bots", "general")
-        await call.message.answer(
-            f"{rules}\n\nبرای ارسال پیام روی دکمه زیر بزنید.",
-            reply_markup=quick_send_kb("bots")
+        text = (
+            f"{rules}\n\n"
+            "برای ارسال پیام درباره ربات‌ها، روی دکمه‌ی زیر بزنید و توضیحات خود را بفرستید."
         )
+        await call.message.answer(text, reply_markup=quick_send_kb("bots"))
+
     elif section == "vserv":
         rules = await get_rules("vserv", "general")
-        await call.message.answer(
-            f"{rules}\n\nبرای ارسال پیام روی دکمه زیر بزنید.",
-            reply_markup=quick_send_kb("vserv")
+        text = (
+            "🛍️ لیست خدمات مجازی:\n"
+            f"{VIRTUAL_SERVICES_LIST}\n\n"
+            f"{rules}\n\n"
+            "برای ثبت درخواست، روی «ارسال پیام» بزنید و سرویس موردنظر، مقدار/تعداد، لینک‌ها و زمان‌بندی را بنویسید."
         )
+        await call.message.answer(text, reply_markup=quick_send_kb("vserv"))
+
     await call.answer()
 
 @dp.callback_query(F.data.startswith(f"{CB_SOULS}|"))
@@ -747,7 +817,7 @@ async def on_action(call: CallbackQuery, state: FSMContext):
     if action == "send":
         await state.set_state(SendToAdmin.waiting_for_text)
         await state.update_data(kind=kind)
-        await call.message.answer("لطفاً متن درخواست/پیام خود را ارسال کنید. لغو: /cancel")
+        await call.message.answer("لطفاً پیام/فایل/آلبوم خود را ارسال کنید. لغو: /cancel")
     else:
         await state.clear()
         await call.message.answer("لغو شد.")
@@ -759,7 +829,7 @@ async def on_send_again(call: CallbackQuery, state: FSMContext):
         return
     await disable_markup(call)
     await state.set_state(SendToAdmin.waiting_for_text)
-    await call.message.answer("متن جدید را بفرستید. لغو: /cancel")
+    await call.message.answer("متن یا فایل جدید را بفرستید. لغو: /cancel")
     await call.answer()
 
 # -------------------- User -> Admin message (only in state) --------------------
@@ -778,49 +848,69 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         await m.answer("فعلاً ادمینی ثبت نشده.")
         return
 
-    kind_map = {
-        "bots":  "گفت‌وگو درباره ربات‌ها",
-        "vserv": "خدمات مجازی",
-        "chat":  "ادمین چت (Souls)",
-        "call":  "ادمین کال (Souls)",
-        "general": "عمومی",
-    }
-    label = kind_map.get(kind, kind)
-
-    preview = (
-        f"📬 درخواست جدید از <code>{m.from_user.id}</code>\n"
-        f"بخش: {label}\n\n"
-        f"{m.html_text}\n\n"
-        f"برای پاسخ: /reply {m.from_user.id}"
+    # اطلاعات کامل کاربر برای ادمین
+    full_name = " ".join(filter(None, [m.from_user.first_name, m.from_user.last_name])) or "-"
+    uname = ("@" + m.from_user.username) if m.from_user.username else "-"
+    info_text = (
+        f"📬 پیام جدید از <a href=\"tg://user?id={m.from_user.id}\">{full_name}</a>\n"
+        f"🆔 ID: <code>{m.from_user.id}</code>\n"
+        f"👤 Username: {uname}\n"
+        f"بخش: {kind}\n\n"
+        "— برای پاسخ از دکمه‌های زیر استفاده کنید —"
     )
 
-    sent_to = 0
+    # آلبوم؟
+    if m.media_group_id:
+        key = (m.from_user.id, m.media_group_id)
+        buf = _album_buffer_u2a.get(key, [])
+        item = _collect_item_from_message(m)
+        if item:
+            buf.append(item); _album_buffer_u2a[key] = buf
+
+        async def _flush():
+            await asyncio.sleep(2)
+            items = _album_buffer_u2a.pop(key, [])
+            caption, ents = m.caption or '', m.caption_entities
+            for aid in admin_ids:
+                try:
+                    # اول اطلاعات
+                    await bot.send_message(aid, info_text, reply_markup=admin_reply_kb(m.from_user.id))
+                    # بعد آلبوم
+                    await _send_media_group(bot, aid, items, caption, ents)
+                except Exception:
+                    pass
+            await log_message(m.from_user.id, None, "user_to_admin", f"album({len(items)})")
+            await state.clear()
+            await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
+        t = _album_tasks_u2a.get(key)
+        if t and not t.done(): t.cancel()
+        _album_tasks_u2a[key] = asyncio.create_task(_flush())
+        return
+
+    # تک‌پیام (همهٔ انواع): اول اطلاعات، بعد کپی پیام
     for aid in admin_ids:
         try:
-            await bot.send_message(aid, preview)
-            sent_to += 1
+            await bot.send_message(aid, info_text, reply_markup=admin_reply_kb(m.from_user.id))
+            await bot.copy_message(chat_id=aid, from_chat_id=m.chat.id, message_id=m.message_id)
         except Exception:
             pass
 
-    await log_message(m.from_user.id, None, "user_to_admin", m.html_text)
+    await log_message(m.from_user.id, None, "user_to_admin", m.caption or m.text or m.content_type)
     await state.clear()
-    if sent_to:
-        await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
-    else:
-        await m.answer("❌ هیچ ادمینی در دسترس نیست.")
+    await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
 
 # -------------------- Group behavior & registration --------------------
 @dp.message()
 async def group_gate(m: Message):
     if m.chat.type in ("group", "supergroup"):
-        # ثبت/آپدیت گروه به‌محض دریافت پیام
+        # ثبت/آپدیت گروه
         await upsert_group(
             chat_id=m.chat.id,
             title=getattr(m.chat, "title", None),
             username=getattr(m.chat, "username", None),
             active=True
         )
-        # فقط اگر «مالک» در متن یا کپشن باشد، پاسخ بده
+        # فقط اگر «مالک» در متن/کپشن باشد، پاسخ بده
         text = (m.text or m.caption or "")
         if contains_malek(text):
             btns = None
