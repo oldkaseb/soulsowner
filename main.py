@@ -502,10 +502,15 @@ async def cmd_help(m: Message):
         txt += "\nبرای راهنمای ادمین‌ها: /adminhelp"
     await m.answer(txt)
 
-@dp.message(Command("adminhelp"))
+@dp.message(
+    F.chat.type == "private",
+    F.text.regexp(r"^/(?:adminhelp|ah)(?:@[\w_]+)?(?:\s+.*)?$")
+)
 async def cmd_adminhelp(m: Message):
-    if m.chat.type != "private" or not await require_admin_msg(m):
+    # چک ادمین با سینک از ENV ADMIN_ID (اگر داخلش باشی، اتومات ادمین می‌شی)
+    if not await require_admin_msg(m):
         return
+
     text = (
         "راهنمای ادمین‌ها:\n"
         "/broadcast – پیام همگانی به کاربران (تک‌پیام/همۀ فایل‌ها/آلبوم)\n"
@@ -520,9 +525,9 @@ async def cmd_adminhelp(m: Message):
         "/setchat – تغییر قوانین «چت Souls»\n"
         "/setcall – تغییر قوانین «کال Souls»\n"
         "/setvserv – ست کردن قوانین خدمات مجازی\n"
-        "/setrules <section> <kind> – ست دلخواه قوانین (souls|bots|vserv + chat|call|general)\n"
+        "/setrules <section> <kind> – (souls|bots|vserv + chat|call|general)\n"
         "/cancel – لغو حالت‌ها\n\n"
-        "نکته: در پیام‌های دریافتی از کاربران، دکمهٔ «✉️ پاسخ» را هم می‌توانید بزنید."
+        "نکته: زیر پیام‌های کاربر، دکمه «✉️ پاسخ» هم دارید."
     )
     await m.answer(text)
 
@@ -990,4 +995,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
