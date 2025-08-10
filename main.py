@@ -29,9 +29,6 @@ from aiogram.types import (
     CallbackQuery,
     InputMediaPhoto,
     InputMediaVideo,
-    InputMediaDocument,
-    InputMediaAnimation,
-    InputMediaAudio,
 )
 from aiogram.client.default import DefaultBotProperties
 
@@ -64,13 +61,13 @@ BTN_SECTION_FREE   = "🗣️ گفت‌وگوی آزاد"
 BTN_GROUP_ADMIN_CHAT = "درخواست ادمین چت"
 BTN_GROUP_ADMIN_CALL = "درخواست ادمین کال"
 
-BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"  # فقط برای Souls
+BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"   # فقط برای Souls
 BTN_CANCEL       = "❌ انصراف"
-BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"
+BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"          # بعد از ارسال موفق کاربر
 BTN_QUICK_SEND   = "✉️ ارسال پیام"               # برای bots/vserv/free
 
 BTN_REPLY        = "✉️ پاسخ"
-BTN_REPLY_AGAIN  = "✉️ پاسخِ مجدد"
+BTN_REPLY_AGAIN  = "✉️ پاسخِ مجدد"                # بعد از ارسال موفق ادمین
 
 # Callback data prefixes
 CB_MAIN    = "main"
@@ -349,8 +346,14 @@ def send_again_kb() -> InlineKeyboardMarkup:
     ])
 
 def admin_reply_kb(user_id: int) -> InlineKeyboardMarkup:
+    # فقط «پاسخ» در مرحله‌ی اول
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_REPLY,       callback_data=f"{CB_REPLY}|{user_id}")],
+        [InlineKeyboardButton(text=BTN_REPLY, callback_data=f"{CB_REPLY}|{user_id}")],
+    ])
+
+def admin_reply_again_kb(user_id: int) -> InlineKeyboardMarkup:
+    # بعد از ارسال موفق، «پاسخِ مجدد»
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_REPLY_AGAIN, callback_data=f"{CB_REPLY}|{user_id}")],
     ])
 
@@ -397,6 +400,7 @@ async def require_admin_call(call: CallbackQuery) -> bool:
     return ok
 
 # -------------------- Album helpers --------------------
+# توجه: آلبوم فقط برای photo/video پشتیبانی می‌شود (طبق محدودیت Telegram).
 _album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_users: Dict[tuple, asyncio.Task] = {}
 _album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}
@@ -409,16 +413,11 @@ _album_buffer_admin_reply: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_admin_reply: Dict[tuple, asyncio.Task] = {}
 
 def _collect_item_from_message(m: Message) -> Optional[Dict[str, Any]]:
+    # برای آلبوم: photo/video کافیست. سایر انواع به صورت تکی handled می‌شوند.
     if m.photo:
         return {'type': 'photo', 'file_id': m.photo[-1].file_id}
     if m.video:
         return {'type': 'video', 'file_id': m.video.file_id}
-    if m.document:
-        return {'type': 'document', 'file_id': m.document.file_id}
-    if m.animation:
-        return {'type': 'animation', 'file_id': m.animation.file_id}
-    if m.audio:
-        return {'type': 'audio', 'file_id': m.audio.file_id}
     return None
 
 async def _send_media_group(bot: Bot, chat_id: int, items: List[Dict[str, Any]], caption, caption_entities):
@@ -429,14 +428,9 @@ async def _send_media_group(bot: Bot, chat_id: int, items: List[Dict[str, Any]],
             media.append(InputMediaPhoto(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
         elif it['type'] == 'video':
             media.append(InputMediaVideo(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-        elif it['type'] == 'document':
-            media.append(InputMediaDocument(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-        elif it['type'] == 'animation':
-            media.append(InputMediaAnimation(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-        elif it['type'] == 'audio':
-            media.append(InputMediaAudio(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
         first = False
-    await bot.send_media_group(chat_id, media)
+    if media:
+        await bot.send_media_group(chat_id, media)
 
 # -------------------- Bot & Dispatcher --------------------
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -498,7 +492,6 @@ async def cmd_broadcast(m: Message, state: FSMContext):
 
 @dp.message(Broadcast.waiting_for_message)
 async def on_broadcast_to_users(m: Message, state: FSMContext):
-    # عبور دادن دستورات (به‌جز /cancel)
     if m.text and m.text.startswith("/") and m.text != "/cancel":
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -668,7 +661,7 @@ async def cmd_reply(m: Message, state: FSMContext, command: CommandObject):
     target_id = int(command.args.strip())
     await state.set_state(AdminReply.waiting_for_any)
     await state.update_data(target_id=target_id)
-    await m.answer(f"متن یا فایل/آلبومِ پاسخ برای کاربر {target_id} را بفرستید. لغو: /cancel")
+    await m.answer(f"در حال پاسخ به کاربر {target_id}. لطفاً پیام/فایل/آلبوم را بفرستید. لغو: /cancel")
 
 # inline reply (buttons)
 @dp.callback_query(F.data.startswith(f"{CB_REPLY}|"))
@@ -694,6 +687,7 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
     data = await state.get_data()
     target_id = int(data.get("target_id"))
 
+    # آلبوم (عکس/ویدیو)
     if m.media_group_id:
         key = (m.from_user.id, target_id, m.media_group_id)
         buf = _album_buffer_admin_reply.get(key, [])
@@ -706,7 +700,7 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
             items = _album_buffer_admin_reply.pop(key, [])
             await _send_media_group(bot, target_id, items, m.caption or '', m.caption_entities)
             await log_message(m.from_user.id, target_id, "admin_to_user", f"album({len(items)})")
-            await m.answer("✅ آلبوم برای کاربر ارسال شد.")
+            await m.answer("✅ ارسال شد.", reply_markup=admin_reply_again_kb(target_id))
             await state.clear()
         t = _album_tasks_admin_reply.get(key)
         if t and not t.done():
@@ -714,15 +708,19 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
         _album_tasks_admin_reply[key] = asyncio.create_task(_flush())
         return
 
+    # تک‌پیام (همه‌ی انواع: ویس/ویدیو نوت/عکس/فیلم/داک/لینک/...)
     try:
         await bot.copy_message(chat_id=target_id, from_chat_id=m.chat.id, message_id=m.message_id)
         await log_message(m.from_user.id, target_id, "admin_to_user", m.caption or m.text or m.content_type)
-        await m.answer("✅ ارسال شد.")
+        await m.answer("✅ ارسال شد.", reply_markup=admin_reply_again_kb(target_id))
     except Exception:
         await m.answer("❌ ارسال نشد. شاید کاربر پیوی ربات را باز نکرده.")
     await state.clear()
 
 # -------------------- Rules setters --------------------
+class SetRules(StatesGroup):
+    waiting_for_text = State()
+
 @dp.message(Command("setrules"))
 async def cmd_setrules(m: Message, state: FSMContext, command: CommandObject):
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -862,7 +860,6 @@ async def on_send_again(call: CallbackQuery, state: FSMContext):
 # -------------------- User -> Admin message (only in state) --------------------
 @dp.message(SendToAdmin.waiting_for_text)
 async def on_user_message_to_admin(m: Message, state: FSMContext):
-    # عبور دادن دستورات کاربر از این state (به‌جز /cancel)
     if m.text and m.text.startswith("/") and m.text != "/cancel":
         return
     if m.chat.type != "private":
@@ -884,9 +881,10 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         f"📬 پیام جدید از <a href=\"tg://user?id={m.from_user.id}\">{full_name}</a>\n"
         f"🆔 ID: <code>{m.from_user.id}</code>\n"
         f"👤 Username: {uname}\n"
-        f"بخش: {kind}\n\n— برای پاسخ از دکمه‌های زیر استفاده کنید —"
+        f"بخش: {kind}\n\n— برای پاسخ از دکمهٔ زیر استفاده کنید —"
     )
 
+    # آلبوم عکس/ویدیو
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_u2a.get(key, [])
@@ -900,7 +898,8 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
             caption, ents = m.caption or '', m.caption_entities
             for aid in admin_ids:
                 try:
-                    await bot.send_message(aid, info_text, reply_markup=admin_reply_kb(m.from_user.id))
+                    kb = admin_reply_kb(m.from_user.id)
+                    await bot.send_message(aid, info_text, reply_markup=kb)
                     await _send_media_group(bot, aid, items, caption, ents)
                 except Exception:
                     pass
@@ -913,10 +912,12 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         _album_tasks_u2a[key] = asyncio.create_task(_flush())
         return
 
+    # تک‌پیام (همه انواع)
     for aid in admin_ids:
         try:
-            await bot.send_message(aid, info_text, reply_markup=admin_reply_kb(m.from_user.id))
-            await bot.copy_message(chat_id=aid, from_chat_id=m.chat.id, message_id=m.message_id)
+            kb = admin_reply_kb(m.from_user.id)
+            await bot.send_message(aid, info_text, reply_markup=kb)
+            await bot.copy_message(chat_id=aid, from_chat_id=m.chat.id, message_id=m.message_id, reply_markup=kb)
         except Exception:
             pass
 
@@ -948,7 +949,7 @@ async def group_gate(m: Message):
             reply_markup=btns
         )
 
-# فقط پی‌وی: فالبک غیر دستوری (روی دستورات اصلاً مچ نمی‌شود)
+# فقط پی‌وی: فالبک غیر دستوری (وقتی در حالت خاصی نیستیم)
 @dp.message(F.chat.type == "private", F.text, ~F.text.regexp(r"^/"))
 async def private_fallback(m: Message, state: FSMContext):
     if await state.get_state():
