@@ -942,6 +942,7 @@ async def group_gate(m: Message):
         username=getattr(m.chat, "username", None),
         active=True
     )
+
     text = (m.text or m.caption or "")
     if contains_malek(text):
         btns = None
@@ -952,12 +953,14 @@ async def group_gate(m: Message):
                     url=f"https://t.me/{BOT_USERNAME}?start=start"
                 )]
             ])
+
+        # ⬇️ پیام ربات
         sent = await m.reply(
-    "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
-    reply_markup=btns
-)
-# فقط پیام ربات پاک شود (پیام کاربر دست‌نخورده می‌ماند)
-asyncio.create_task(_auto_delete(sent.chat.id, sent.message_id, delay=30))
+            "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
+            reply_markup=btns
+        )
+        # ⬇️ حذف خودکار همون پیام بعد از ۳۰ ثانیه
+        asyncio.create_task(_auto_delete(sent.chat.id, sent.message_id, delay=30))
 
 # فقط پی‌وی: فالبک غیر دستوری (وقتی در حالت خاصی نیستیم)
 @dp.message(F.chat.type == "private", F.text, ~F.text.regexp(r"^/"))
@@ -984,5 +987,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
