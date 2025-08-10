@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Telegram Bot – aiogram v3 + asyncpg  (single file)
+Telegram Bot – aiogram v3 + asyncpg (single file)
 
 ENV (Railway):
   BOT_TOKEN="..."
@@ -9,12 +9,12 @@ ENV (Railway):
 
 نکته: API_ID و API_HASH استفاده نمی‌شوند (مربوط به Pyrogram/Telethon).
 """
-
 import asyncio
 import logging
 import os
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict, Any
+from pathlib import Path
 
 import asyncpg
 from aiogram import Bot, Dispatcher, F
@@ -33,7 +33,6 @@ from aiogram.types import (
 )
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
-from pathlib import Path
 
 # -------------------- Config & Logging --------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -51,35 +50,38 @@ BOT_USERNAME: str = ""
 
 # -------------------- Texts --------------------
 WELCOME_TEXT = """سلام! 👋
-به ربات ارتباطی خوش اومدی. یکی از بخش‌ها رو انتخاب کن:"""
+یکی از بخش‌ها را انتخاب کنید تا دقیق‌تر بفهمم چه کاری دارید:"""
+
 MAIN_MENU_TEXT = "یکی از گزینه‌ها را انتخاب کنید:"
 
-# buttons
-BTN_SECTION_GROUP = "ارتباط با ادمین‌های گروه"
-BTN_SECTION_BOTS = "ارتباط با ربات‌های من"
-BTN_SECTION_VSERV = "خدمات مجازی"
+# Buttons
+BTN_SECTION_BOTS  = "🤖 گفت‌وگو درباره ربات‌ها"
+BTN_SECTION_SOULS = "💬 گروه Souls"
+BTN_SECTION_VSERV = "🛍️ خدمات مجازی"
+
 BTN_GROUP_ADMIN_CHAT = "درخواست ادمین چت"
 BTN_GROUP_ADMIN_CALL = "درخواست ادمین کال"
-BTN_SEND_REQUEST = "📨 ارسال درخواست"
-BTN_CANCEL = "❌ انصراف"
-BTN_SEND_AGAIN = "✉️ ارسال پیام مجدد"
+
+BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"
+BTN_CANCEL       = "❌ انصراف"
+BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"
 
 # callbacks
-CB_MAIN = "main"
-CB_SECTION = "sec"
-CB_GSUB = "gsub"
-CB_GACTION = "gact"
-CB_SEND_AGAIN = "again"
+CB_MAIN   = "main"
+CB_SEC    = "sec"     # sec|bots / sec|souls / sec|vserv
+CB_SOULS  = "souls"   # souls|chat / souls|call
+CB_ACTION = "act"     # act|send|<kind> or act|cancel|<kind>
+CB_AGAIN  = "again"   # again|start
 
 # -------------------- FSM --------------------
 class SendToAdmin(StatesGroup):
     waiting_for_text = State()
 
-class Broadcast(StatesGroup):
-    waiting_for_message = State()       # users
+class Broadcast(StatesGroup):       # به کاربران
+    waiting_for_message = State()
 
-class GroupBroadcast(StatesGroup):
-    waiting_for_message = State()       # groups
+class GroupBroadcast(StatesGroup):  # به گروه‌ها
+    waiting_for_message = State()
 
 class AdminReply(StatesGroup):
     waiting_for_text = State()
@@ -106,7 +108,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS rules (
-    section TEXT NOT NULL,     -- group|bots|vserv
+    section TEXT NOT NULL,     -- souls|bots|vserv
     kind    TEXT NOT NULL,     -- chat|call|general
     text    TEXT NOT NULL,
     PRIMARY KEY (section, kind)
@@ -131,72 +133,12 @@ CREATE TABLE IF NOT EXISTS groups (
 );
 """
 
+# پیش‌فرض‌ها اگر فایل‌ها نباشند
 DEFAULT_RULES: List[Tuple[str, str, str]] = [
-    ("group", "chat", """قوانین ادمین‌های چت:
-
-1. مهم‌ترین قانون، رعایت ادب در برابر ممبرهاست تا بی‌احترامی یا گستاخی نبینید. شوخی‌ها فقط در نجوا انجام شود.
-
-2. هر ادمین چت موظف است روزانه حداقل 800 پیام ارسال کند. در صورت نرسیدن به این آمار:
-   - بار اول: اخطار
-   - بار دوم: اخطار دوم
-   - بار سوم: عزل در صورت نداشتن دلیل منطقی
-
-3. در برخورد با ممبر بی‌ادب (توهین، فحاشی):
-   - مرحله اول: اخطار
-   - مرحله دوم: سکوت
-   - مرحله سوم: بن در پیوی
-   سپس، تمام پیام‌های بحث پاک‌سازی و شات برای گارد ارسال شود.
-
-4. در صورت بروز بحث میان ادمین‌ها، فقط مالک یا ادمین ارشد اجازه دخالت دارد. ارائه شهادت فقط در پیوی مالک یا ارشد انجام شود.
-
-5. هنگام ورود به گروه باید علامت ✅ و هنگام اف شدن باید علامت ❌ جهت اطلاع به مالک ارسال شود.
-
-6. چت نباید بدون ادمین باشد. در صورت اف شدن، باید چت به ادمین بعدی تحویل داده شود و در گارد اعلام شود.
-
-7. ادمین چت موظف است در بازی‌های کال شرکت کرده و ممبرها را تگ کند تا به شرکت در بازی ترغیب شوند.
-
-8. هیچ‌کس به‌جز مالک گروه اجازه ویژه دائم یا رهایی کاربران را ندارد.
-
-9. استفاده مداوم از ربات‌های چالش و بازی جهت فعال نگه داشتن فضا الزامی است.
-
-10. مسائل شخصی نباید به گروه منتقل شود.
-
-11. در تایم عضوگیری، حضور ادمین‌ها الزامی است. در صورت غیبت، باید با مالک هماهنگ شود.
-
-12. ادمین چت دسترسی به کال ندارد و نباید در وظایف ادمین کال دخالت کند. مدیریت چت بر عهده شماست."""),
-    ("group", "call", """قوانین ادمین‌های کال:
-
-1. رعایت ادب در برابر ممبرها الزامی است. بی‌احترامی به هیچ وجه پذیرفته نیست.
-
-2. هر ادمین کال موظف است حداقل 5 ساعت در روز در کال حضور مؤثر داشته باشد، با ممبرها گفتگو کند، خوش‌آمد بگوید و از همه درخواست مایک کند.
-
-3. ران کردن بازی‌ها به‌ویژه بازی شب مهم‌ترین وظیفه است. بازی شب ساعت 10:30 ران می‌شود و حضور از ساعت 10 الزامی است.
-
-4. برخورد با ممبر بی‌ادب (توهین، فحاشی):
-   - مرحله اول: بستن مایک و آرام‌سازی
-   - در صورت تکرار: بن با ربات از کف گروه
-
-5. در صورت بروز بحث میان ادمین‌ها، فقط مالک یا ادمین ارشد حق دخالت دارد. شهادت صرفاً در پیوی مالک یا ارشد ارائه شود.
-
-6. هنگام ورود به گروه باید علامت ✅ و هنگام اف شدن باید علامت ❌ جهت اطلاع به مالک ارسال شود.
-
-7. هر ادمین کال دارای تایتل اختصاصی است که باید هنگام حضور در کال از آن استفاده کند. تایتل‌ها باید ذخیره شده و دقیق درج شوند.
-
-8. کال نباید بدون ادمین باشد. در صورت اف شدن، باید به ادمین بعدی تحویل داده شده و این موضوع در گارد اعلام شود. ادمین بعدی نیز باید تأیید کند و تایتل جدید درج نماید.
-
-9. ادمین کال موظف است در بازی‌ها حضور فعال داشته و همراه با ادمین‌های چت، ممبرها را به شرکت در بازی تشویق کند.
-
-10. ادمین کال حق ویژه کردن کاربران را ندارد. در صورت نیاز، باید از ادمین چت درخواست کند و مطابق با قوانین اقدام کند.
-
-11. هر ادمین کال باید روزانه حداقل 300 پیام دعوت به کال ارسال کند (با تگ یا ریپلای).
-
-12. مسائل شخصی نباید به گروه منتقل شود.
-
-13. در تایم عضوگیری، حضور الزامی است. در صورت عدم توانایی، باید با مالک هماهنگ شود.
-
-14. ادمین‌های کال نباید در کار ادمین‌های چت دخالت کنند. مسئولیت کال فقط بر عهده شماست."""),
-    ("bots", "general", "قوانین ارتباط با ربات‌ها: ابتدا شناسه ربات و مشکل را دقیق بنویسید."),
-    ("vserv", "general", "قوانین خدمات مجازی: نوع سرویس و توضیحات کامل را ارسال کنید."),
+    ("souls", "chat", "قوانین چت گروه Souls: محترمانه باشید. از اسپم خودداری کنید."),
+    ("souls", "call", "قوانین کال گروه Souls: هماهنگی زمان و رعایت ادب الزامی است."),
+    ("bots",  "general", "برای گفت‌وگو درباره ربات‌ها: نام ربات، مشکل/درخواست و اسکرین‌شات را ذکر کنید."),
+    ("vserv", "general", "برای خدمات مجازی: نوع سرویس، جزئیات و زمان‌بندی را بنویسید."),
 ]
 
 async def init_db():
@@ -205,7 +147,8 @@ async def init_db():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     async with DB_POOL.acquire() as conn:
         await conn.execute(CREATE_SQL)
-        # default rules (insert if missing)
+
+        # پیش‌فرض‌ها
         for section, kind, text in DEFAULT_RULES:
             await conn.execute(
                 """
@@ -215,7 +158,31 @@ async def init_db():
                 """,
                 section, kind, text,
             )
-        # seed admins
+
+        # قوانین از فایل‌ها (اگر باشند) → روی دیتابیس ست/آپدیت می‌شوند
+        try:
+            chat_p = Path("rules_chat.txt")
+            call_p = Path("rules_call.txt")
+            if chat_p.exists():
+                txt = chat_p.read_text(encoding="utf-8").strip()
+                if txt:
+                    await conn.execute(
+                        """INSERT INTO rules(section,kind,text) VALUES('souls','chat',$1)
+                           ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
+                        txt,
+                    )
+            if call_p.exists():
+                txt = call_p.read_text(encoding="utf-8").strip()
+                if txt:
+                    await conn.execute(
+                        """INSERT INTO rules(section,kind,text) VALUES('souls','call',$1)
+                           ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
+                        txt,
+                    )
+        except Exception as e:
+            logging.warning("could not load local rules files: %s", e)
+
+        # ادمین‌های اولیه
         if ADMIN_ID_RAW:
             nums = [n for n in ADMIN_ID_RAW.replace(",", " ").split() if n.isdigit()]
             for uid in map(int, nums):
@@ -227,29 +194,8 @@ async def init_db():
                     """,
                     uid,
                 )
-        # load local rules files if present
-        try:
-            chat_p = Path("rules_chat.txt")
-            call_p = Path("rules_call.txt")
-            if chat_p.exists():
-                text = chat_p.read_text(encoding="utf-8").strip()
-                if text:
-                    await conn.execute(
-                        """INSERT INTO rules(section,kind,text) VALUES('group','chat',$1)
-                           ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
-                        text,
-                    )
-            if call_p.exists():
-                text = call_p.read_text(encoding="utf-8").strip()
-                if text:
-                    await conn.execute(
-                        """INSERT INTO rules(section,kind,text) VALUES('group','call',$1)
-                           ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
-                        text,
-                    )
-        except Exception as e:
-            logging.warning("could not load local rules files: %s", e)
 
+# --- DB helpers ---
 async def upsert_user(m: Message):
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
@@ -268,7 +214,7 @@ async def get_user(user_id: int) -> Optional[User]:
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         row = await conn.fetchrow("SELECT user_id, is_admin, blocked FROM users WHERE user_id=$1", user_id)
-        return User(row[0], row[1], row[2]) if row else None
+    return User(row[0], row[1], row[2]) if row else None
 
 async def set_admin(user_id: int, is_admin: bool):
     assert DB_POOL is not None
@@ -319,7 +265,7 @@ async def log_message(from_user: int, to_user: Optional[int], direction: str, co
             from_user, to_user, direction, content,
         )
 
-# groups helpers
+# گروه‌ها
 async def upsert_group(chat_id: int, title: Optional[str], username: Optional[str], active: bool = True):
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
@@ -354,27 +300,27 @@ async def list_groups(limit: int = 50) -> List[Tuple[int, str]]:
 # -------------------- Keyboards --------------------
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_SECTION_GROUP, callback_data=f"{CB_SECTION}|group")],
-        [InlineKeyboardButton(text=BTN_SECTION_BOTS,  callback_data=f"{CB_SECTION}|bots")],
-        [InlineKeyboardButton(text=BTN_SECTION_VSERV, callback_data=f"{CB_SECTION}|vserv")],
+        [InlineKeyboardButton(text=BTN_SECTION_BOTS,  callback_data=f"{CB_SEC}|bots")],
+        [InlineKeyboardButton(text=BTN_SECTION_SOULS, callback_data=f"{CB_SEC}|souls")],
+        [InlineKeyboardButton(text=BTN_SECTION_VSERV, callback_data=f"{CB_SEC}|vserv")],
     ])
 
-def group_submenu_kb() -> InlineKeyboardMarkup:
+def souls_submenu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_GROUP_ADMIN_CHAT, callback_data=f"{CB_GSUB}|chat")],
-        [InlineKeyboardButton(text=BTN_GROUP_ADMIN_CALL, callback_data=f"{CB_GSUB}|call")],
+        [InlineKeyboardButton(text=BTN_GROUP_ADMIN_CHAT, callback_data=f"{CB_SOULS}|chat")],
+        [InlineKeyboardButton(text=BTN_GROUP_ADMIN_CALL, callback_data=f"{CB_SOULS}|call")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
     ])
 
 def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_GACTION}|send|{kind}")],
-        [InlineKeyboardButton(text=BTN_CANCEL, callback_data=f"{CB_GACTION}|cancel|{kind}")],
+        [InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_ACTION}|send|{kind}")],
+        [InlineKeyboardButton(text=BTN_CANCEL,       callback_data=f"{CB_ACTION}|cancel|{kind}")],
     ])
 
 def send_again_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_SEND_AGAIN, callback_data=f"{CB_SEND_AGAIN}|start")]
+        [InlineKeyboardButton(text=BTN_SEND_AGAIN, callback_data=f"{CB_AGAIN}|start")]
     ])
 
 # -------------------- Helpers --------------------
@@ -391,17 +337,41 @@ async def require_admin(message: Message) -> bool:
         return False
     return True
 
-# -------------------- Albums buffers --------------------
+# -------------------- Album helpers --------------------
 _album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_users: Dict[tuple, asyncio.Task] = {}
 _album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_groups: Dict[tuple, asyncio.Task] = {}
 
+async def _send_media_group_to_chats(bot: Bot, chat_ids: List[int], items: List[Dict[str, Any]], caption, caption_entities):
+    sent = 0
+    for cid in chat_ids:
+        try:
+            media = []
+            first = True
+            for it in items:
+                if it['type'] == 'photo':
+                    media.append(InputMediaPhoto(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'video':
+                    media.append(InputMediaVideo(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'document':
+                    media.append(InputMediaDocument(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'animation':
+                    media.append(InputMediaAnimation(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                elif it['type'] == 'audio':
+                    media.append(InputMediaAudio(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
+                first = False
+            await bot.send_media_group(cid, media)
+            sent += 1
+        except Exception:
+            continue
+    return sent
+
 # -------------------- Bot --------------------
 bot = Bot(BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
 
-# -------------------- Public commands (private) --------------------
+# -------------------- User commands (private) --------------------
 @dp.message(Command("start"))
 async def cmd_start(m: Message, state: FSMContext):
     if m.chat.type != "private":
@@ -431,79 +401,49 @@ async def cmd_help(m: Message):
         "/broadcast – پیام همگانی به کاربران (همۀ انواع فایل/آلبوم)\n"
         "/groupsend – پیام به تمام گروه‌ها (همۀ انواع فایل/آلبوم)\n"
         "/listgroups – لیست گروه‌های ثبت‌شده\n"
-        "/stats – آمار دقیق\n"
-        "/addadmin <user_id> – افزودن ادمین\n"
-        "/deladmin <user_id> – حذف ادمین\n"
-        "/block <user_id> – بلاک\n"
-        "/unblock <user_id> – آنبلاک\n"
-        "/setchat – تغییر قوانین چت گروه\n"
-        "/setcall – تغییر قوانین کال گروه\n"
-        "/setvserv – ست‌کردن قوانین خدمات مجازی\n"
-        "/setrules <section> <kind>\n"
-        "/reply <user_id> – پاسخ به کاربر\n"
+        "/stats – آمار\n"
+        "/addadmin <id> /deladmin <id>\n"
+        "/block <id> /unblock <id>\n"
+        "/setchat /setcall /setvserv /setrules <section> <kind>\n"
+        "/reply <user_id>\n"
     )
     await m.answer(text)
 
-# -------------------- Admin: broadcasts to USERS --------------------
+# -------------------- Admin commands --------------------
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
     await state.set_state(Broadcast.waiting_for_message)
-    await m.answer("پیام/فایل/آلبوم مورد نظر برای ارسال همگانی به *کاربران* را بفرستید. لغو: /cancel")
-
-async def _send_media_group_to_chats(chat_ids: List[int], items: List[Dict[str, Any]], caption, caption_entities):
-    sent = 0
-    for cid in chat_ids:
-        try:
-            media = []
-            first = True
-            for it in items:
-                if it['type'] == 'photo':
-                    media.append(InputMediaPhoto(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'video':
-                    media.append(InputMediaVideo(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'document':
-                    media.append(InputMediaDocument(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'animation':
-                    media.append(InputMediaAnimation(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                elif it['type'] == 'audio':
-                    media.append(InputMediaAudio(media=it['file_id'], caption=caption if first else None, caption_entities=caption_entities if first else None))
-                first = False
-            await bot.send_media_group(cid, media)
-            sent += 1
-        except Exception:
-            continue
-    return sent
+    await m.answer("پیام/فایل/آلبوم برای *کاربران* را بفرستید. لغو: /cancel")
 
 @dp.message(Broadcast.waiting_for_message)
 async def on_broadcast_to_users(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
 
-    # Albums
+    # آلبوم
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_users.get(key, [])
         item = None
-        if m.photo: item = {'type': 'photo', 'file_id': m.photo[-1].file_id}
-        elif m.video: item = {'type': 'video', 'file_id': m.video.file_id}
-        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
-        elif m.animation: item = {'type': 'animation', 'file_id': m.animation.file_id}
-        elif m.audio: item = {'type': 'audio', 'file_id': m.audio.file_id}
+        if m.photo:     item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
+        elif m.video:   item = {'type': 'video',    'file_id': m.video.file_id}
+        elif m.document:item = {'type': 'document', 'file_id': m.document.file_id}
+        elif m.animation:item= {'type': 'animation','file_id': m.animation.file_id}
+        elif m.audio:   item = {'type': 'audio',    'file_id': m.audio.file_id}
         if item:
             buf.append(item); _album_buffer_users[key] = buf
 
         async def _flush():
             await asyncio.sleep(2)
             items = _album_buffer_users.pop(key, [])
-            caption = m.caption or ''
-            caption_entities = m.caption_entities
+            caption, ents = m.caption or '', m.caption_entities
             assert DB_POOL is not None
             async with DB_POOL.acquire() as conn:
                 rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
             chat_ids = [r[0] for r in rows]
-            sent = await _send_media_group_to_chats(chat_ids, items, caption, caption_entities)
+            sent = await _send_media_group_to_chats(bot, chat_ids, items, caption, ents)
             await state.clear()
             await m.answer(f"✅ آلبوم برای {sent} کاربر ارسال شد.")
         t = _album_tasks_users.get(key)
@@ -511,7 +451,7 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
         _album_tasks_users[key] = asyncio.create_task(_flush())
         return
 
-    # Single message
+    # تک پیام
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         rows = await conn.fetch("SELECT user_id FROM users WHERE blocked=FALSE")
@@ -527,39 +467,36 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(f"✅ ارسال شد برای {sent} کاربر.")
 
-# -------------------- Admin: broadcasts to GROUPS --------------------
 @dp.message(Command("groupsend"))
 async def cmd_groupsend(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
     await state.set_state(GroupBroadcast.waiting_for_message)
-    await m.answer("پیام/فایل/آلبوم مورد نظر برای ارسال به *همه گروه‌ها* را بفرستید. لغو: /cancel")
+    await m.answer("پیام/فایل/آلبوم برای *تمام گروه‌ها* را بفرستید. لغو: /cancel")
 
 @dp.message(GroupBroadcast.waiting_for_message)
 async def on_broadcast_to_groups(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
 
-    # Albums
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_groups.get(key, [])
         item = None
-        if m.photo: item = {'type': 'photo', 'file_id': m.photo[-1].file_id}
-        elif m.video: item = {'type': 'video', 'file_id': m.video.file_id}
-        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
-        elif m.animation: item = {'type': 'animation', 'file_id': m.animation.file_id}
-        elif m.audio: item = {'type': 'audio', 'file_id': m.audio.file_id}
+        if m.photo:     item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
+        elif m.video:   item = {'type': 'video',    'file_id': m.video.file_id}
+        elif m.document:item = {'type': 'document', 'file_id': m.document.file_id}
+        elif m.animation:item= {'type': 'animation','file_id': m.animation.file_id}
+        elif m.audio:   item = {'type': 'audio',    'file_id': m.audio.file_id}
         if item:
             buf.append(item); _album_buffer_groups[key] = buf
 
         async def _flush():
             await asyncio.sleep(2)
             items = _album_buffer_groups.pop(key, [])
-            caption = m.caption or ''
-            caption_entities = m.caption_entities
+            caption, ents = m.caption or '', m.caption_entities
             chat_ids = await get_group_ids(active_only=True)
-            sent = await _send_media_group_to_chats(chat_ids, items, caption, caption_entities)
+            sent = await _send_media_group_to_chats(bot, chat_ids, items, caption, ents)
             await state.clear()
             await m.answer(f"✅ آلبوم برای {sent} گروه ارسال شد.")
         t = _album_tasks_groups.get(key)
@@ -567,7 +504,6 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
         _album_tasks_groups[key] = asyncio.create_task(_flush())
         return
 
-    # Single message
     chat_ids = await get_group_ids(active_only=True)
     sent = 0
     for gid in chat_ids:
@@ -590,14 +526,13 @@ async def cmd_listgroups(m: Message):
     lines = [f"• {name} — <code>{cid}</code>" for cid, name in items]
     await m.answer("گروه‌های ثبت‌شده (تا ۵۰ مورد اخیر):\n" + "\n".join(lines))
 
-# -------------------- Admin: misc --------------------
 @dp.message(Command("stats"))
 async def cmd_stats(m: Message):
     if m.chat.type != "private" or not await require_admin(m):
         return
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
-        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+        total_users  = await conn.fetchval("SELECT COUNT(*) FROM users")
         total_groups = await conn.fetchval("SELECT COUNT(*) FROM groups WHERE is_active=TRUE")
     await m.answer(f"📊 کاربران: {total_users}\n👥 گروه‌های فعال: {total_groups}")
 
@@ -668,13 +603,13 @@ async def cmd_setrules(m: Message, state: FSMContext, command: CommandObject):
     if m.chat.type != "private" or not await require_admin(m):
         return
     if not command.args:
-        return await m.answer("فرمت: /setrules <section> <kind>\nمثال: /setrules group chat")
+        return await m.answer("فرمت: /setrules <section> <kind>\nمثال: /setrules souls chat")
     args = command.args.strip().split()
     if len(args) != 2:
-        return await m.answer("باید دقیقاً دو آرگومان بدهید: section و kind (مثلاً: group chat)")
+        return await m.answer("باید دقیقاً دو آرگومان بدهید: section و kind (مثلاً: souls chat)")
     section, kind = args
-    if section not in {"group", "bots", "vserv"}:
-        return await m.answer("section نامعتبر است. یکی از: group, bots, vserv")
+    if section not in {"souls", "bots", "vserv"}:
+        return await m.answer("section نامعتبر است. یکی از: souls, bots, vserv")
     await state.set_state(SetRules.waiting_for_text)
     await state.update_data(section=section, kind=kind)
     await m.answer(f"متن جدید قوانین برای {section}/{kind} را بفرستید. لغو: /cancel")
@@ -684,16 +619,16 @@ async def cmd_setchat(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
     await state.set_state(SetRules.waiting_for_text)
-    await state.update_data(section="group", kind="chat")
-    await m.answer("متن قوانین جدید برای «چت گروه» را بفرستید. لغو: /cancel")
+    await state.update_data(section="souls", kind="chat")
+    await m.answer("متن قوانین جدید برای «چت گروه Souls» را بفرستید. لغو: /cancel")
 
 @dp.message(Command("setcall"))
 async def cmd_setcall(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
     await state.set_state(SetRules.waiting_for_text)
-    await state.update_data(section="group", kind="call")
-    await m.answer("متن قوانین جدید برای «کال گروه» را بفرستید. لغو: /cancel")
+    await state.update_data(section="souls", kind="call")
+    await m.answer("متن قوانین جدید برای «کال گروه Souls» را بفرستید. لغو: /cancel")
 
 @dp.message(Command("setvserv"))
 async def cmd_setvserv(m: Message, state: FSMContext):
@@ -703,7 +638,7 @@ async def cmd_setvserv(m: Message, state: FSMContext):
     await state.update_data(section="vserv", kind="general")
     await m.answer("متن قوانین/شرایط «خدمات مجازی» را بفرستید. لغو: /cancel")
 
-@dp.message(SetRules.waiting_for_text))
+@dp.message(SetRules.waiting_for_text)
 async def on_set_rules_text(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
@@ -719,17 +654,129 @@ async def cmd_cancel(m: Message, state: FSMContext):
     await state.clear()
     await m.answer("لغو شد.")
 
+# -------------------- User flows (callbacks) --------------------
+@dp.callback_query(F.data.startswith(f"{CB_MAIN}|"))
+async def on_back_to_menu(call: CallbackQuery, state: FSMContext):
+    if call.message.chat.type != "private":
+        return
+    await disable_markup(call)
+    await state.clear()
+    await call.message.answer(MAIN_MENU_TEXT, reply_markup=main_menu_kb())
+    await call.answer()
+
+@dp.callback_query(F.data.startswith(f"{CB_SEC}|"))
+async def on_section(call: CallbackQuery):
+    if call.message.chat.type != "private":
+        return
+    await disable_markup(call)
+    _, section = call.data.split("|", 1)
+
+    if section == "souls":
+        # قوانین چت/کال از دیتابیس (rules_chat.txt / rules_call.txt)
+        await call.message.answer("بخش گروه Souls – نوع درخواست را انتخاب کنید:", reply_markup=souls_submenu_kb())
+    elif section == "bots":
+        # راهنمای مختصر برای فهم دقیق درخواست
+        rules = await get_rules("bots", "general")
+        text = f"{rules}\n\nبرای ادامه، قوانین را بپذیرید و درخواست خود را ارسال کنید."
+        await call.message.answer(text, reply_markup=after_rules_kb("bots"))
+    elif section == "vserv":
+        rules = await get_rules("vserv", "general")
+        text = f"{rules}\n\nبرای ادامه، قوانین را بپذیرید و درخواست خود را ارسال کنید."
+        await call.message.answer(text, reply_markup=after_rules_kb("vserv"))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith(f"{CB_SOULS}|"))
+async def on_souls_kind(call: CallbackQuery):
+    if call.message.chat.type != "private":
+        return
+    await disable_markup(call)
+    _, kind = call.data.split("|", 1)  # chat or call
+    rules = await get_rules("souls", kind)
+    await call.message.answer(rules, reply_markup=after_rules_kb(kind))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith(f"{CB_ACTION}|"))
+async def on_action(call: CallbackQuery, state: FSMContext):
+    if call.message.chat.type != "private":
+        return
+    await disable_markup(call)
+    _, action, kind = call.data.split("|", 2)
+    if action == "send":
+        await state.set_state(SendToAdmin.waiting_for_text)
+        await state.update_data(kind=kind)
+        await call.message.answer("لطفاً متن درخواست/پیام خود را ارسال کنید. لغو: /cancel")
+    else:
+        await state.clear()
+        await call.message.answer("لغو شد.")
+    await call.answer()
+
+@dp.callback_query(F.data.startswith(f"{CB_AGAIN}|"))
+async def on_send_again(call: CallbackQuery, state: FSMContext):
+    if call.message.chat.type != "private":
+        return
+    await disable_markup(call)
+    await state.set_state(SendToAdmin.waiting_for_text)
+    await call.message.answer("متن جدید را بفرستید. لغو: /cancel")
+    await call.answer()
+
+# -------------------- User -> Admin message (only in state) --------------------
+@dp.message(SendToAdmin.waiting_for_text)
+async def on_user_message_to_admin(m: Message, state: FSMContext):
+    if m.chat.type != "private":
+        return
+    u = await get_user(m.from_user.id)
+    if u and u.blocked:
+        return await m.answer("شما مسدود شده‌اید.")
+
+    data = await state.get_data()
+    kind = data.get("kind", "general")  # bots / vserv / chat / call
+    admin_ids = await get_admin_ids()
+    if not admin_ids:
+        await m.answer("فعلاً ادمینی ثبت نشده.")
+        return
+
+    kind_map = {
+        "bots":  "گفت‌وگو درباره ربات‌ها",
+        "vserv": "خدمات مجازی",
+        "chat":  "ادمین چت (Souls)",
+        "call":  "ادمین کال (Souls)",
+    }
+    kind_label = kind_map.get(kind, kind)
+
+    preview = (
+        f"📬 درخواست جدید از <code>{m.from_user.id}</code>\n"
+        f"بخش: {kind_label}\n\n"
+        f"{m.html_text}\n\n"
+        f"برای پاسخ: /reply {m.from_user.id}"
+    )
+
+    sent_to = 0
+    for aid in admin_ids:
+        try:
+            await bot.send_message(aid, preview)
+            sent_to += 1
+        except Exception:
+            pass
+
+    await log_message(m.from_user.id, None, "user_to_admin", m.html_text)
+    await state.clear()
+    if sent_to:
+        await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
+    else:
+        await m.answer("❌ هیچ ادمینی در دسترس نیست.")
+
 # -------------------- Group behavior & registration --------------------
 @dp.message()
 async def group_gate(m: Message):
     if m.chat.type in ("group", "supergroup"):
-        # ثبت/به‌روزرسانی گروه به‌محض دریافت پیام
+        # ثبت گروه به‌محض دریافت پیام
         await upsert_group(
             chat_id=m.chat.id,
             title=getattr(m.chat, "title", None),
             username=getattr(m.chat, "username", None),
             active=True
         )
+        # فقط اگر «مالک» در متن/کپشن بود جواب بده
         text = (m.text or m.caption or "")
         if "مالک" in text:
             btns = None
@@ -740,7 +787,7 @@ async def group_gate(m: Message):
             await m.reply("سلام! برای ارتباط مستقیم، لطفاً به پی‌وی ربات پیام بدید. 👇", reply_markup=btns)
         return
 
-    # PV helper
+    # در پی‌وی اگر پیام دستور نبود، راهنمای کوتاه
     if m.chat.type == "private" and not (m.text or "").startswith("/"):
         await m.answer("برای شروع از /menu استفاده کنید.")
 
