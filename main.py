@@ -461,7 +461,7 @@ async def cmd_menu(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(MAIN_MENU_TEXT, reply_markup=main_menu_kb())
 
-@dp.message(Command("whoami"))
+@dp.message(Command("whoami")))
 async def cmd_whoami(m: Message):
     if m.chat.type != "private":
         return
@@ -490,26 +490,12 @@ async def cmd_seedadmin(m: Message):
 
 @dp.message(Command("help"))
 async def cmd_help(m: Message):
-    # فقط در پی‌وی
-    if m.chat.type != "private":
+    # فقط ادمین‌ها
+    if m.chat.type != "private" or not await require_admin_msg(m):
         return
 
-    # ثبت/آپدیت کاربر در DB
-    await upsert_user(m)
-
-    # اگر آیدی در ENV بود، همینجا ادمین بشه؛ در غیر این صورت از DB می‌خوانیم
-    is_admin = await _check_and_seed_admin(m.from_user.id)
-
-    user_help = (
-        "دستورات کاربری:\n"
-        "/start – شروع\n"
-        "/menu – نمایش منو\n"
-        "/help – همین راهنما\n\n"
-        "از منو یکی از بخش‌ها (گروه Souls / ربات‌ها / خدمات مجازی / گفت‌وگوی آزاد) را انتخاب و پیام/فایل/آلبوم ارسال کنید.\n"
-    )
-
-    admin_help = (
-        "\n— راهنمای ادمین‌ها —\n"
+    text = (
+        "— راهنمای ادمین‌ها —\n"
         "/whoami – نمایش وضعیت ادمین بودن\n"
         "/seedadmin – اگر هیچ ادمینی نیست، شما را اولین ادمین می‌کند\n"
         "/addadmin <id> – افزودن ادمین\n"
@@ -528,8 +514,6 @@ async def cmd_help(m: Message):
         "/cancel – لغو حالت فعلی\n"
         "نکته: زیر پیام‌های کاربران، دکمه «✉️ پاسخ» هم دارید.\n"
     )
-
-    text = user_help + (admin_help if is_admin else "")
     await m.answer(text)
 
 # -------------------- Admin: broadcasts to USERS --------------------
@@ -542,8 +526,12 @@ async def cmd_broadcast(m: Message, state: FSMContext):
 
 @dp.message(Broadcast.waiting_for_message)
 async def on_broadcast_to_users(m: Message, state: FSMContext):
+    # عبور دادن دستورات (مثل /help)
+    if m.text and m.text.startswith("/") and m.text != "/cancel":
+        return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
+
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_users.get(key, [])
@@ -597,8 +585,12 @@ async def cmd_groupsend(m: Message, state: FSMContext):
 
 @dp.message(GroupBroadcast.waiting_for_message)
 async def on_broadcast_to_groups(m: Message, state: FSMContext):
+    # عبور دادن دستورات
+    if m.text and m.text.startswith("/") and m.text != "/cancel":
+        return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
+
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_groups.get(key, [])
@@ -703,7 +695,7 @@ async def cmd_reply(m: Message, state: FSMContext, command: CommandObject):
     await state.update_data(target_id=target_id)
     await m.answer(f"متن یا فایل/آلبومِ پاسخ برای کاربر {target_id} را بفرستید. لغو: /cancel")
 
-# inline reply (buttons) — admin check based on call.from_user
+# inline reply (buttons)
 @dp.callback_query(F.data.startswith(f"{CB_REPLY}|"))
 async def cb_reply(call: CallbackQuery, state: FSMContext):
     if call.message.chat.type != "private":
@@ -719,8 +711,12 @@ async def cb_reply(call: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminReply.waiting_for_any)
 async def on_admin_reply_any(m: Message, state: FSMContext):
+    # عبور دادن دستورات
+    if m.text and m.text.startswith("/") and m.text != "/cancel":
+        return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
+
     data = await state.get_data()
     target_id = int(data.get("target_id"))
 
@@ -794,6 +790,9 @@ async def cmd_setvserv(m: Message, state: FSMContext):
 
 @dp.message(SetRules.waiting_for_text)
 async def on_set_rules_text(m: Message, state: FSMContext):
+    # عبور دادن دستورات
+    if m.text and m.text.startswith("/") and m.text != "/cancel":
+        return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
     data = await state.get_data()
@@ -889,8 +888,12 @@ async def on_send_again(call: CallbackQuery, state: FSMContext):
 # -------------------- User -> Admin message (only in state) --------------------
 @dp.message(SendToAdmin.waiting_for_text)
 async def on_user_message_to_admin(m: Message, state: FSMContext):
+    # عبور دادن دستورات کاربر (مثلاً /help) از این state
+    if m.text and m.text.startswith("/") and m.text != "/cancel":
+        return
     if m.chat.type != "private":
         return
+
     u = await get_user(m.from_user.id)
     if u and u.blocked:
         return await m.answer("شما مسدود شده‌اید.")
@@ -970,10 +973,9 @@ async def group_gate(m: Message):
             reply_markup=btns
         )
 
-# فقط پی‌وی: فالبک غیر دستوری — اما اگر در حالت هستیم، دخالت نکند
-@dp.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
+# فقط پی‌وی: فالبک غیر دستوری (روی دستورات اصلاً مچ نمی‌شود)
+@dp.message(F.chat.type == "private", F.text, ~F.text.regexp(r"^/"))
 async def private_fallback(m: Message, state: FSMContext):
-    # اگر در حالت خاص FSM هستیم دخالت نکند
     if await state.get_state():
         return
     await m.answer("برای شروع از /menu استفاده کنید.")
@@ -996,4 +998,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
-
