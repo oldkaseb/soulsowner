@@ -35,6 +35,7 @@ from aiogram.types import (
     InputMediaAnimation,
     InputMediaAudio,
 )
+from aiogram.client.default import DefaultBotProperties
 
 # -------------------- Config & Logging --------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -376,7 +377,7 @@ async def _send_media_group_to_chats(bot: Bot, chat_ids: List[int], items: List[
     return sent
 
 # -------------------- Bot --------------------
-bot = Bot(BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 # -------------------- User commands (private) --------------------
