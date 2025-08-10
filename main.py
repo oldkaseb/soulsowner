@@ -64,9 +64,10 @@ BTN_SECTION_VSERV = "🛍️ خدمات مجازی"
 BTN_GROUP_ADMIN_CHAT = "درخواست ادمین چت"
 BTN_GROUP_ADMIN_CALL = "درخواست ادمین کال"
 
-BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"
+BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"  # فقط برای Souls
 BTN_CANCEL       = "❌ انصراف"
 BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"
+BTN_QUICK_SEND   = "✉️ ارسال پیام"               # برای bots/vserv
 
 # Callback data prefixes
 CB_MAIN   = "main"
@@ -312,9 +313,17 @@ def souls_submenu_kb() -> InlineKeyboardMarkup:
     ])
 
 def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
+    # فقط برای Souls استفاده می‌شود (پذیرش قوانین)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_ACTION}|send|{kind}")],
         [InlineKeyboardButton(text=BTN_CANCEL,       callback_data=f"{CB_ACTION}|cancel|{kind}")],
+    ])
+
+def quick_send_kb(kind: str) -> InlineKeyboardMarkup:
+    # برای bots/vserv: فقط ارسال پیام، بدون پذیرش قوانین
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=BTN_QUICK_SEND, callback_data=f"{CB_ACTION}|send|{kind}")],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
     ])
 
 def send_again_kb() -> InlineKeyboardMarkup:
@@ -403,18 +412,36 @@ async def cmd_menu(m: Message, state: FSMContext):
 async def cmd_help(m: Message):
     if m.chat.type != "private":
         return
-    text = (
+    u = await get_user(m.from_user.id)
+    txt = (
         "دستورات کاربری:\n"
         "/start /menu /help\n\n"
-        "دستورات ادمین:\n"
-        "/broadcast – پیام همگانی به کاربران (همۀ انواع فایل/آلبوم)\n"
-        "/groupsend – پیام به تمام گروه‌ها (همۀ انواع فایل/آلبوم)\n"
+        "• از منو بخش موردنظر را انتخاب کنید و پیام بفرستید.\n"
+    )
+    if u and u.is_admin:
+        txt += "\nبرای راهنمای ادمین‌ها: /adminhelp"
+    await m.answer(txt)
+
+@dp.message(Command("adminhelp"))
+async def cmd_adminhelp(m: Message):
+    if m.chat.type != "private" or not await require_admin(m):
+        return
+    text = (
+        "راهنمای ادمین‌ها:\n"
+        "/broadcast – پیام همگانی به کاربران (تک‌پیام/همۀ فایل‌ها/آلبوم)\n"
+        "/groupsend – پیام به تمام گروه‌ها (تک‌پیام/همۀ فایل‌ها/آلبوم)\n"
         "/listgroups – لیست گروه‌های ثبت‌شده\n"
-        "/stats – آمار\n"
-        "/addadmin <id> /deladmin <id>\n"
-        "/block <id> /unblock <id>\n"
-        "/setchat /setcall /setvserv /setrules <section> <kind>\n"
-        "/reply <user_id>\n"
+        "/stats – آمار کاربران و گروه‌ها\n"
+        "/addadmin <id> – افزودن ادمین\n"
+        "/deladmin <id> – حذف ادمین\n"
+        "/block <id> – بلاک کاربر\n"
+        "/unblock <id> – آنبلاک کاربر\n"
+        "/reply <user_id> – پاسخ مستقیم به کاربر\n"
+        "/setchat – تغییر قوانین «چت Souls» از داخل ربات\n"
+        "/setcall – تغییر قوانین «کال Souls» از داخل ربات\n"
+        "/setvserv – ست کردن قوانین خدمات مجازی\n"
+        "/setrules <section> <kind> – ست دلخواه قوانین (souls|bots|vserv + chat|call|general)\n"
+        "/cancel – لغو حالت‌ها\n"
     )
     await m.answer(text)
 
@@ -684,13 +711,21 @@ async def on_section(call: CallbackQuery):
     _, section = call.data.split("|", 1)
 
     if section == "souls":
+        # فقط Souls → پذیرش قوانین
         await call.message.answer("بخش گروه Souls – نوع درخواست را انتخاب کنید:", reply_markup=souls_submenu_kb())
     elif section == "bots":
+        # bots → ارسال پیام مستقیم
         rules = await get_rules("bots", "general")
-        await call.message.answer(f"{rules}\n\nلطفاً قوانین را بپذیرید و سپس درخواست خود را ارسال کنید.", reply_markup=after_rules_kb("bots"))
+        await call.message.answer(
+            f"{rules}\n\nبرای ارسال پیام روی دکمه زیر بزنید.",
+            reply_markup=quick_send_kb("bots")
+        )
     elif section == "vserv":
         rules = await get_rules("vserv", "general")
-        await call.message.answer(f"{rules}\n\nلطفاً قوانین را بپذیرید و سپس درخواست خود را ارسال کنید.", reply_markup=after_rules_kb("vserv"))
+        await call.message.answer(
+            f"{rules}\n\nبرای ارسال پیام روی دکمه زیر بزنید.",
+            reply_markup=quick_send_kb("vserv")
+        )
     await call.answer()
 
 @dp.callback_query(F.data.startswith(f"{CB_SOULS}|"))
@@ -823,4 +858,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
-
