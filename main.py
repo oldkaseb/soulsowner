@@ -486,48 +486,50 @@ async def cmd_seedadmin(m: Message):
     if ids:
         return await m.answer("⛔ قبلاً ادمین ثبت شده. برای اضافه‌کردن بقیه از دستور /addadmin استفاده کنید.")
     await set_admin(m.from_user.id, True)
-    await m.answer("✅ شما به‌عنوان اولین ادمین ثبت شدید. حالا می‌تونید از دستورات ادمینی استفاده کنید (مثلاً /adminhelp).")
+    await m.answer("✅ شما به‌عنوان اولین ادمین ثبت شدید. حالا می‌تونید از دستورات ادمینی استفاده کنید (مثلاً /help).")
 
 @dp.message(Command("help"))
 async def cmd_help(m: Message):
+    # فقط در پی‌وی
     if m.chat.type != "private":
         return
-    u = await get_user(m.from_user.id)
-    txt = (
-        "دستورات کاربری:\n"
-        "/start /menu /help\n\n"
-        "• از منو بخش موردنظر را انتخاب کنید و پیام بفرستید.\n"
-    )
-    if u and u.is_admin:
-        txt += "\nبرای راهنمای ادمین‌ها: /adminhelp"
-    await m.answer(txt)
 
-# ---- FIXED: adminhelp robust handler (private only) ----
-@dp.message(
-    F.chat.type == "private",
-    F.text.regexp(r"^/(?:adminhelp|ah)(?:@[\w_]+)?(?:\s+.*)?$")
-)
-async def cmd_adminhelp(m: Message):
-    if not await require_admin_msg(m):
-        return
-    text = (
-        "راهنمای ادمین‌ها:\n"
-        "/broadcast – پیام همگانی به کاربران (تک‌پیام/همۀ فایل‌ها/آلبوم)\n"
-        "/groupsend – پیام به تمام گروه‌ها (تک‌پیام/همۀ فایل‌ها/آلبوم)\n"
-        "/listgroups – لیست گروه‌های ثبت‌شده\n"
-        "/stats – آمار کاربران و گروه‌ها\n"
+    # ثبت/آپدیت کاربر در DB
+    await upsert_user(m)
+
+    # اگر آیدی در ENV بود، همینجا ادمین بشه؛ در غیر این صورت از DB می‌خوانیم
+    is_admin = await _check_and_seed_admin(m.from_user.id)
+
+    user_help = (
+        "دستورات کاربری:\n"
+        "/start – شروع\n"
+        "/menu – نمایش منو\n"
+        "/help – همین راهنما\n\n"
+        "از منو یکی از بخش‌ها (گروه Souls / ربات‌ها / خدمات مجازی / گفت‌وگوی آزاد) را انتخاب و پیام/فایل/آلبوم ارسال کنید.\n"
+    )
+
+    admin_help = (
+        "\n— راهنمای ادمین‌ها —\n"
+        "/whoami – نمایش وضعیت ادمین بودن\n"
+        "/seedadmin – اگر هیچ ادمینی نیست، شما را اولین ادمین می‌کند\n"
         "/addadmin <id> – افزودن ادمین\n"
         "/deladmin <id> – حذف ادمین\n"
         "/block <id> – بلاک کاربر\n"
         "/unblock <id> – آنبلاک کاربر\n"
-        "/reply <user_id> – پاسخ مستقیم به کاربر (همۀ انواع پیام)\n"
+        "/reply <user_id> – پاسخ مستقیم به کاربر (هر نوع پیام/فایل/آلبوم)\n"
+        "/broadcast – پیام همگانی به تمام کاربران (تک‌پیام/فایل/آلبوم)\n"
+        "/groupsend – پیام به همهٔ گروه‌های ثبت‌شده (تک‌پیام/فایل/آلبوم)\n"
+        "/listgroups – لیست گروه‌های فعال ثبت‌شده\n"
+        "/stats – آمار کاربران و گروه‌ها\n"
         "/setchat – تغییر قوانین «چت Souls»\n"
         "/setcall – تغییر قوانین «کال Souls»\n"
-        "/setvserv – ست کردن قوانین خدمات مجازی\n"
-        "/setrules <section> <kind> – ست دلخواه قوانین (souls|bots|vserv + chat|call|general)\n"
-        "/cancel – لغو حالت‌ها\n\n"
-        "نکته: در پیام‌های دریافتی از کاربران، دکمهٔ «✉️ پاسخ» را هم می‌توانید بزنید."
+        "/setvserv – قوانین/شرایط «خدمات مجازی»\n"
+        "/setrules <section> <kind> – (souls|bots|vserv + chat|call|general)\n"
+        "/cancel – لغو حالت فعلی\n"
+        "نکته: زیر پیام‌های کاربران، دکمه «✉️ پاسخ» هم دارید.\n"
     )
+
+    text = user_help + (admin_help if is_admin else "")
     await m.answer(text)
 
 # -------------------- Admin: broadcasts to USERS --------------------
