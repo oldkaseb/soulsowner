@@ -40,6 +40,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", os.getenv("ADMIN_SEED_IDS", "")).strip()
+ADMIN_IDS_SEED = {int(n) for n in ADMIN_ID_RAW.replace(",", " ").split() if n.strip().isdigit()}
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN env var is required")
@@ -369,7 +370,15 @@ async def disable_markup(call: CallbackQuery):
         pass
 
 async def require_admin(message: Message) -> bool:
+    # مطمئن شو در users ثبت است
+    await upsert_user(message)
     u = await get_user(message.from_user.id)
+
+    # اگر در ENV به عنوان ادمین تعریف شده، ارتقا بده
+    if (not u or not u.is_admin) and (message.from_user.id in ADMIN_IDS_SEED):
+        await set_admin(message.from_user.id, True)
+        u = await get_user(message.from_user.id)
+
     if not (u and u.is_admin):
         await message.answer("⛔ این دستور مخصوص ادمین‌هاست.")
         return False
@@ -929,35 +938,36 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
     await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
 
 # -------------------- Group behavior & registration --------------------
-@dp.message()
+# فقط گروه/سوپرگروه
+@dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def group_gate(m: Message):
-    if m.chat.type in ("group", "supergroup"):
-        # ثبت/آپدیت گروه
-        await upsert_group(
-            chat_id=m.chat.id,
-            title=getattr(m.chat, "title", None),
-            username=getattr(m.chat, "username", None),
-            active=True
+    # ثبت/آپدیت گروه
+    await upsert_group(
+        chat_id=m.chat.id,
+        title=getattr(m.chat, "title", None),
+        username=getattr(m.chat, "username", None),
+        active=True
+    )
+    # فقط اگر «مالک» در متن/کپشن باشد، پاسخ بده
+    text = (m.text or m.caption or "")
+    if contains_malek(text):
+        btns = None
+        if BOT_USERNAME:
+            btns = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="پیام به منشی مالک",
+                    url=f"https://t.me/{BOT_USERNAME}?start=start"
+                )]
+            ])
+        await m.reply(
+            "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
+            reply_markup=btns
         )
-        # فقط اگر «مالک» در متن/کپشن باشد، پاسخ بده
-        text = (m.text or m.caption or "")
-        if contains_malek(text):
-            btns = None
-            if BOT_USERNAME:
-                btns = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="پیام به منشی مالک",
-                        url=f"https://t.me/{BOT_USERNAME}?start=start"
-                    )]
-                ])
-            await m.reply(
-                "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
-                reply_markup=btns
-            )
-        return
 
-    # در پی‌وی: اگر دستور نیست و در حالت خاصی هم نیست، راهنما بده
-    if m.chat.type == "private" and not (m.text or "").startswith("/"):
+# فقط پی‌وی: فالبک غیر دستوری
+@dp.message(F.chat.type == "private")
+async def private_fallback(m: Message):
+    if not (m.text or "").startswith("/"):
         await m.answer("برای شروع از /menu استفاده کنید.")
 
 # -------------------- Entrypoint --------------------
@@ -977,5 +987,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
-
-
