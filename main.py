@@ -964,9 +964,11 @@ async def group_gate(m: Message):
             reply_markup=btns
         )
 
-# فقط پی‌وی: فالبک غیر دستوری
+# فقط پی‌وی: فالبک غیر دستوری — اما اگر در حالت هستیم، دخالت نکند
 @dp.message(F.chat.type == "private")
-async def private_fallback(m: Message):
+async def private_fallback(m: Message, state: FSMContext):
+    if await state.get_state():
+        return  # در حالتی مثل Reply/Broadcast/SetRules هستیم؛ مزاحم نشو
     if not (m.text or "").startswith("/"):
         await m.answer("برای شروع از /menu استفاده کنید.")
 
