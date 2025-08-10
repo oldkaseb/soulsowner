@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Telegram Bot – aiogram v3.7+ + asyncpg (single file)
+Telegram Bot – aiogram v3.7 + asyncpg (single file)
 
 ENV (Railway):
   BOT_TOKEN="..."
@@ -363,7 +363,7 @@ def _normalize_fa(s: str) -> str:
 
 def contains_malek(text: str) -> bool:
     t = _normalize_fa(text or "")
-    return "مالک" in t
+    return "مالک" in t  # شامل حالت‌های «مالکش/مالکشو/...»
 
 async def disable_markup(call: CallbackQuery):
     try:
@@ -373,13 +373,11 @@ async def disable_markup(call: CallbackQuery):
 
 # --- admin check: message vs callback ---
 async def _check_and_seed_admin(user_id: int) -> bool:
-    # اگر در ENV است، ارتقا بده
     if user_id in ADMIN_IDS_SEED:
         u = await get_user(user_id)
         if not (u and u.is_admin):
             await set_admin(user_id, True)
         return True
-    # در غیر اینصورت وضعیت فعلی DB
     u = await get_user(user_id)
     return bool(u and u.is_admin)
 
@@ -440,7 +438,7 @@ async def _send_media_group(bot: Bot, chat_id: int, items: List[Dict[str, Any]],
         first = False
     await bot.send_media_group(chat_id, media)
 
-# -------------------- Bot --------------------
+# -------------------- Bot & Dispatcher --------------------
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
@@ -463,7 +461,7 @@ async def cmd_menu(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(MAIN_MENU_TEXT, reply_markup=main_menu_kb())
 
-@dp.message(Command("whoami"))
+@dp.message(Command("whoami")))
 async def cmd_whoami(m: Message):
     if m.chat.type != "private":
         return
@@ -699,7 +697,7 @@ async def cmd_reply(m: Message, state: FSMContext, command: CommandObject):
     await state.update_data(target_id=target_id)
     await m.answer(f"متن یا فایل/آلبومِ پاسخ برای کاربر {target_id} را بفرستید. لغو: /cancel")
 
-# inline reply (buttons) — FIXED admin check (use call.from_user)
+# inline reply (buttons) — admin check based on call.from_user
 @dp.callback_query(F.data.startswith(f"{CB_REPLY}|"))
 async def cb_reply(call: CallbackQuery, state: FSMContext):
     if call.message.chat.type != "private":
@@ -975,14 +973,12 @@ async def private_fallback(m: Message, state: FSMContext):
         await m.answer("برای شروع از /menu استفاده کنید.")
 
 # -------------------- Entrypoint --------------------
-bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
-
 async def main():
     global BOT_USERNAME, DB_POOL
     await init_db()
     me = await bot.get_me()
     BOT_USERNAME = me.username or ""
+    logging.info(f"Bot connected as @{BOT_USERNAME}")
     try:
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
