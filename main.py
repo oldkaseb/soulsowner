@@ -342,7 +342,8 @@ def quick_send_kb(kind: str) -> InlineKeyboardMarkup:
 
 def send_again_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_SEND_AGAIN, callback_data=f"{CB_AGAIN}|start")]
+        [InlineKeyboardButton(text=BTN_SEND_AGAIN, callback_data=f"{CB_AGAIN}|start")],
+        [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data=f"{CB_MAIN}|menu")],
     ])
 
 def admin_reply_kb(user_id: int) -> InlineKeyboardMarkup:
@@ -974,3 +975,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
