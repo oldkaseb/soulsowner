@@ -486,35 +486,7 @@ async def cmd_seedadmin(m: Message):
     if ids:
         return await m.answer("⛔ قبلاً ادمین ثبت شده. برای اضافه‌کردن بقیه از دستور /addadmin استفاده کنید.")
     await set_admin(m.from_user.id, True)
-    await m.answer("✅ شما به‌عنوان اولین ادمین ثبت شدید. حالا می‌تونید از دستورات ادمینی استفاده کنید (مثلاً /help).")
-
-@dp.message(Command("help"))
-async def cmd_help(m: Message):
-    # فقط ادمین‌ها
-    if m.chat.type != "private" or not await require_admin_msg(m):
-        return
-
-    text = (
-        "— راهنمای ادمین‌ها —\n"
-        "/whoami – نمایش وضعیت ادمین بودن\n"
-        "/seedadmin – اگر هیچ ادمینی نیست، شما را اولین ادمین می‌کند\n"
-        "/addadmin <id> – افزودن ادمین\n"
-        "/deladmin <id> – حذف ادمین\n"
-        "/block <id> – بلاک کاربر\n"
-        "/unblock <id> – آنبلاک کاربر\n"
-        "/reply <user_id> – پاسخ مستقیم به کاربر (هر نوع پیام/فایل/آلبوم)\n"
-        "/broadcast – پیام همگانی به تمام کاربران (تک‌پیام/فایل/آلبوم)\n"
-        "/groupsend – پیام به همهٔ گروه‌های ثبت‌شده (تک‌پیام/فایل/آلبوم)\n"
-        "/listgroups – لیست گروه‌های فعال ثبت‌شده\n"
-        "/stats – آمار کاربران و گروه‌ها\n"
-        "/setchat – تغییر قوانین «چت Souls»\n"
-        "/setcall – تغییر قوانین «کال Souls»\n"
-        "/setvserv – قوانین/شرایط «خدمات مجازی»\n"
-        "/setrules <section> <kind> – (souls|bots|vserv + chat|call|general)\n"
-        "/cancel – لغو حالت فعلی\n"
-        "نکته: زیر پیام‌های کاربران، دکمه «✉️ پاسخ» هم دارید.\n"
-    )
-    await m.answer(text)
+    await m.answer("✅ شما به‌عنوان اولین ادمین ثبت شدید. برای دیدن وضعیت، /whoami را بزنید.")
 
 # -------------------- Admin: broadcasts to USERS --------------------
 @dp.message(Command("broadcast"))
@@ -526,7 +498,7 @@ async def cmd_broadcast(m: Message, state: FSMContext):
 
 @dp.message(Broadcast.waiting_for_message)
 async def on_broadcast_to_users(m: Message, state: FSMContext):
-    # عبور دادن دستورات (مثل /help)
+    # عبور دادن دستورات (به‌جز /cancel)
     if m.text and m.text.startswith("/") and m.text != "/cancel":
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -552,11 +524,13 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
                 try:
                     await _send_media_group(bot, uid, items, caption, ents)
                     sent += 1
-                except Exception: pass
+                except Exception:
+                    pass
             await state.clear()
             await m.answer(f"✅ آلبوم برای {sent} کاربر ارسال شد.")
         t = _album_tasks_users.get(key)
-        if t and not t.done(): t.cancel()
+        if t and not t.done():
+            t.cancel()
         _album_tasks_users[key] = asyncio.create_task(_flush())
         return
 
@@ -585,7 +559,6 @@ async def cmd_groupsend(m: Message, state: FSMContext):
 
 @dp.message(GroupBroadcast.waiting_for_message)
 async def on_broadcast_to_groups(m: Message, state: FSMContext):
-    # عبور دادن دستورات
     if m.text and m.text.startswith("/") and m.text != "/cancel":
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -608,11 +581,13 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
                 try:
                     await _send_media_group(bot, gid, items, caption, ents)
                     sent += 1
-                except Exception: pass
+                except Exception:
+                    pass
             await state.clear()
             await m.answer(f"✅ آلبوم برای {sent} گروه ارسال شد.")
         t = _album_tasks_groups.get(key)
-        if t and not t.done(): t.cancel()
+        if t and not t.done():
+            t.cancel()
         _album_tasks_groups[key] = asyncio.create_task(_flush())
         return
 
@@ -711,7 +686,6 @@ async def cb_reply(call: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminReply.waiting_for_any)
 async def on_admin_reply_any(m: Message, state: FSMContext):
-    # عبور دادن دستورات
     if m.text and m.text.startswith("/") and m.text != "/cancel":
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -735,7 +709,8 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
             await m.answer("✅ آلبوم برای کاربر ارسال شد.")
             await state.clear()
         t = _album_tasks_admin_reply.get(key)
-        if t and not t.done(): t.cancel()
+        if t and not t.done():
+            t.cancel()
         _album_tasks_admin_reply[key] = asyncio.create_task(_flush())
         return
 
@@ -790,7 +765,6 @@ async def cmd_setvserv(m: Message, state: FSMContext):
 
 @dp.message(SetRules.waiting_for_text)
 async def on_set_rules_text(m: Message, state: FSMContext):
-    # عبور دادن دستورات
     if m.text and m.text.startswith("/") and m.text != "/cancel":
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -888,7 +862,7 @@ async def on_send_again(call: CallbackQuery, state: FSMContext):
 # -------------------- User -> Admin message (only in state) --------------------
 @dp.message(SendToAdmin.waiting_for_text)
 async def on_user_message_to_admin(m: Message, state: FSMContext):
-    # عبور دادن دستورات کاربر (مثلاً /help) از این state
+    # عبور دادن دستورات کاربر از این state (به‌جز /cancel)
     if m.text and m.text.startswith("/") and m.text != "/cancel":
         return
     if m.chat.type != "private":
@@ -934,7 +908,8 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
             await state.clear()
             await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
         t = _album_tasks_u2a.get(key)
-        if t and not t.done(): t.cancel()
+        if t and not t.done():
+            t.cancel()
         _album_tasks_u2a[key] = asyncio.create_task(_flush())
         return
 
@@ -998,4 +973,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
-
