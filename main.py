@@ -7,19 +7,23 @@ ENV (Railway):
   DATABASE_URL="postgresql://user:pass@host:port/dbname"
   ADMIN_ID="123456, 987654"  # یک یا چند آیدی با کاما/فاصله
 
-نکته: API_ID و API_HASH استفاده نمی‌شوند (مربوط به Pyrogram/Telethon).
+نکته: API_ID و API_HASH استفاده نمی‌شوند (برای Pyrogram هستند).
 """
+
 import asyncio
 import logging
 import os
+import unicodedata
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Dict, Any
 from pathlib import Path
+from typing import Optional, List, Tuple, Dict, Any
 
 import asyncpg
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import (
     Message,
     InlineKeyboardButton,
@@ -31,8 +35,6 @@ from aiogram.types import (
     InputMediaAnimation,
     InputMediaAudio,
 )
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.context import FSMContext
 
 # -------------------- Config & Logging --------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -51,10 +53,9 @@ BOT_USERNAME: str = ""
 # -------------------- Texts --------------------
 WELCOME_TEXT = """سلام! 👋
 یکی از بخش‌ها را انتخاب کنید تا دقیق‌تر بفهمم چه کاری دارید:"""
-
 MAIN_MENU_TEXT = "یکی از گزینه‌ها را انتخاب کنید:"
 
-# Buttons
+# Buttons (fa-IR)
 BTN_SECTION_BOTS  = "🤖 گفت‌وگو درباره ربات‌ها"
 BTN_SECTION_SOULS = "💬 گروه Souls"
 BTN_SECTION_VSERV = "🛍️ خدمات مجازی"
@@ -66,7 +67,7 @@ BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"
 BTN_CANCEL       = "❌ انصراف"
 BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"
 
-# callbacks
+# Callback data prefixes
 CB_MAIN   = "main"
 CB_SEC    = "sec"     # sec|bots / sec|souls / sec|vserv
 CB_SOULS  = "souls"   # souls|chat / souls|call
@@ -133,9 +134,9 @@ CREATE TABLE IF NOT EXISTS groups (
 );
 """
 
-# پیش‌فرض‌ها اگر فایل‌ها نباشند
+# Defaults if files are missing
 DEFAULT_RULES: List[Tuple[str, str, str]] = [
-    ("souls", "chat", "قوانین چت گروه Souls: محترمانه باشید. از اسپم خودداری کنید."),
+    ("souls", "chat", "قوانین چت گروه Souls: محترمانه باشید و از اسپم خودداری کنید."),
     ("souls", "call", "قوانین کال گروه Souls: هماهنگی زمان و رعایت ادب الزامی است."),
     ("bots",  "general", "برای گفت‌وگو درباره ربات‌ها: نام ربات، مشکل/درخواست و اسکرین‌شات را ذکر کنید."),
     ("vserv", "general", "برای خدمات مجازی: نوع سرویس، جزئیات و زمان‌بندی را بنویسید."),
@@ -147,8 +148,7 @@ async def init_db():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     async with DB_POOL.acquire() as conn:
         await conn.execute(CREATE_SQL)
-
-        # پیش‌فرض‌ها
+        # default rules (insert if missing)
         for section, kind, text in DEFAULT_RULES:
             await conn.execute(
                 """
@@ -158,31 +158,29 @@ async def init_db():
                 """,
                 section, kind, text,
             )
-
-        # قوانین از فایل‌ها (اگر باشند) → روی دیتابیس ست/آپدیت می‌شوند
+        # load local rules files if present
         try:
             chat_p = Path("rules_chat.txt")
             call_p = Path("rules_call.txt")
             if chat_p.exists():
-                txt = chat_p.read_text(encoding="utf-8").strip()
-                if txt:
+                t = chat_p.read_text(encoding="utf-8").strip()
+                if t:
                     await conn.execute(
                         """INSERT INTO rules(section,kind,text) VALUES('souls','chat',$1)
                            ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
-                        txt,
+                        t,
                     )
             if call_p.exists():
-                txt = call_p.read_text(encoding="utf-8").strip()
-                if txt:
+                t = call_p.read_text(encoding="utf-8").strip()
+                if t:
                     await conn.execute(
                         """INSERT INTO rules(section,kind,text) VALUES('souls','call',$1)
                            ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
-                        txt,
+                        t,
                     )
         except Exception as e:
             logging.warning("could not load local rules files: %s", e)
-
-        # ادمین‌های اولیه
+        # seed admins
         if ADMIN_ID_RAW:
             nums = [n for n in ADMIN_ID_RAW.replace(",", " ").split() if n.isdigit()]
             for uid in map(int, nums):
@@ -324,6 +322,16 @@ def send_again_kb() -> InlineKeyboardMarkup:
     ])
 
 # -------------------- Helpers --------------------
+def _normalize_fa(s: str) -> str:
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s)
+    return s.replace("ي", "ی").replace("ك", "ک")
+
+def contains_malek(text: str) -> bool:
+    t = _normalize_fa(text or "")
+    return "مالک" in t  # شامل حالت‌های «مالکش/مالکشو/مالک‌ها/…»
+
 async def disable_markup(call: CallbackQuery):
     try:
         await call.message.edit_reply_markup(reply_markup=None)
@@ -409,7 +417,7 @@ async def cmd_help(m: Message):
     )
     await m.answer(text)
 
-# -------------------- Admin commands --------------------
+# -------------------- Admin: broadcasts to USERS --------------------
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
@@ -427,11 +435,11 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_users.get(key, [])
         item = None
-        if m.photo:     item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
-        elif m.video:   item = {'type': 'video',    'file_id': m.video.file_id}
-        elif m.document:item = {'type': 'document', 'file_id': m.document.file_id}
-        elif m.animation:item= {'type': 'animation','file_id': m.animation.file_id}
-        elif m.audio:   item = {'type': 'audio',    'file_id': m.audio.file_id}
+        if m.photo:      item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
+        elif m.video:    item = {'type': 'video',    'file_id': m.video.file_id}
+        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
+        elif m.animation:item = {'type': 'animation','file_id': m.animation.file_id}
+        elif m.audio:    item = {'type': 'audio',    'file_id': m.audio.file_id}
         if item:
             buf.append(item); _album_buffer_users[key] = buf
 
@@ -467,6 +475,7 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(f"✅ ارسال شد برای {sent} کاربر.")
 
+# -------------------- Admin: broadcasts to GROUPS --------------------
 @dp.message(Command("groupsend"))
 async def cmd_groupsend(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
@@ -479,15 +488,16 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin(m):
         return
 
+    # آلبوم
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_groups.get(key, [])
         item = None
-        if m.photo:     item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
-        elif m.video:   item = {'type': 'video',    'file_id': m.video.file_id}
-        elif m.document:item = {'type': 'document', 'file_id': m.document.file_id}
-        elif m.animation:item= {'type': 'animation','file_id': m.animation.file_id}
-        elif m.audio:   item = {'type': 'audio',    'file_id': m.audio.file_id}
+        if m.photo:      item = {'type': 'photo',    'file_id': m.photo[-1].file_id}
+        elif m.video:    item = {'type': 'video',    'file_id': m.video.file_id}
+        elif m.document: item = {'type': 'document', 'file_id': m.document.file_id}
+        elif m.animation:item = {'type': 'animation','file_id': m.animation.file_id}
+        elif m.audio:    item = {'type': 'audio',    'file_id': m.audio.file_id}
         if item:
             buf.append(item); _album_buffer_groups[key] = buf
 
@@ -504,6 +514,7 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
         _album_tasks_groups[key] = asyncio.create_task(_flush())
         return
 
+    # تک پیام
     chat_ids = await get_group_ids(active_only=True)
     sent = 0
     for gid in chat_ids:
@@ -672,17 +683,13 @@ async def on_section(call: CallbackQuery):
     _, section = call.data.split("|", 1)
 
     if section == "souls":
-        # قوانین چت/کال از دیتابیس (rules_chat.txt / rules_call.txt)
         await call.message.answer("بخش گروه Souls – نوع درخواست را انتخاب کنید:", reply_markup=souls_submenu_kb())
     elif section == "bots":
-        # راهنمای مختصر برای فهم دقیق درخواست
         rules = await get_rules("bots", "general")
-        text = f"{rules}\n\nبرای ادامه، قوانین را بپذیرید و درخواست خود را ارسال کنید."
-        await call.message.answer(text, reply_markup=after_rules_kb("bots"))
+        await call.message.answer(f"{rules}\n\nلطفاً قوانین را بپذیرید و سپس درخواست خود را ارسال کنید.", reply_markup=after_rules_kb("bots"))
     elif section == "vserv":
         rules = await get_rules("vserv", "general")
-        text = f"{rules}\n\nبرای ادامه، قوانین را بپذیرید و درخواست خود را ارسال کنید."
-        await call.message.answer(text, reply_markup=after_rules_kb("vserv"))
+        await call.message.answer(f"{rules}\n\nلطفاً قوانین را بپذیرید و سپس درخواست خود را ارسال کنید.", reply_markup=after_rules_kb("vserv"))
     await call.answer()
 
 @dp.callback_query(F.data.startswith(f"{CB_SOULS}|"))
@@ -740,12 +747,13 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         "vserv": "خدمات مجازی",
         "chat":  "ادمین چت (Souls)",
         "call":  "ادمین کال (Souls)",
+        "general": "عمومی",
     }
-    kind_label = kind_map.get(kind, kind)
+    label = kind_map.get(kind, kind)
 
     preview = (
         f"📬 درخواست جدید از <code>{m.from_user.id}</code>\n"
-        f"بخش: {kind_label}\n\n"
+        f"بخش: {label}\n\n"
         f"{m.html_text}\n\n"
         f"برای پاسخ: /reply {m.from_user.id}"
     )
@@ -769,25 +777,31 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
 @dp.message()
 async def group_gate(m: Message):
     if m.chat.type in ("group", "supergroup"):
-        # ثبت گروه به‌محض دریافت پیام
+        # ثبت/آپدیت گروه به‌محض دریافت پیام
         await upsert_group(
             chat_id=m.chat.id,
             title=getattr(m.chat, "title", None),
             username=getattr(m.chat, "username", None),
             active=True
         )
-        # فقط اگر «مالک» در متن/کپشن بود جواب بده
+        # فقط اگر «مالک» در متن یا کپشن باشد، پاسخ بده
         text = (m.text or m.caption or "")
-        if "مالک" in text:
+        if contains_malek(text):
             btns = None
             if BOT_USERNAME:
                 btns = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="شروع گفتگو در پی‌وی", url=f"https://t.me/{BOT_USERNAME}?start=start")]
+                    [InlineKeyboardButton(
+                        text="پیام به منشی مالک",
+                        url=f"https://t.me/{BOT_USERNAME}?start=start"
+                    )]
                 ])
-            await m.reply("سلام! برای ارتباط مستقیم، لطفاً به پی‌وی ربات پیام بدید. 👇", reply_markup=btns)
+            await m.reply(
+                "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
+                reply_markup=btns
+            )
         return
 
-    # در پی‌وی اگر پیام دستور نبود، راهنمای کوتاه
+    # در پی‌وی: اگر دستور نیست و در حالت خاصی هم نیست، راهنما بده
     if m.chat.type == "private" and not (m.text or "").startswith("/"):
         await m.answer("برای شروع از /menu استفاده کنید.")
 
