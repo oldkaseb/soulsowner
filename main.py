@@ -635,7 +635,7 @@ async def on_reply_content(m: Message, state: FSMContext):
         return
     data = await state.get_data()
     msg_id = data.get("message_id")
-    GROUP_CHAT_ID = -100xxxxxxxxxx  # آیدی عددی گروه خصوصی
+    GROUP_CHAT_ID = -1002761402663  # آیدی عددی گروه خصوصی
 
     try:
         # ارسال رسانه با copy_message
@@ -1039,6 +1039,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
