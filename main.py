@@ -95,7 +95,7 @@ class SetRules(StatesGroup):
 
 class GroupReply(StatesGroup):
     waiting_for_link = State()
-    waiting_for_text = State()
+    waiting_for_content = State()
 
 # -------------------- DB --------------------
 @dataclass
@@ -1039,6 +1039,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
