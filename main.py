@@ -604,6 +604,22 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(f"✅ ارسال شد برای {sent} گروه.")
 
+@dp.message(Command("replygroup"))
+async def cmd_replygroup(m: Message, command: CommandObject):
+    if not await require_admin_msg(m):
+        return
+    args = command.args.strip().split(maxsplit=1)
+    if len(args) != 2 or not args[0].isdigit():
+        return await m.answer("فرمت: /replygroup <message_id> <متن>")
+    msg_id = int(args[0])
+    text = args[1]
+    try:
+        await bot.send_message(chat_id=GROUP_CHAT_ID, text=text, reply_to_message_id=msg_id)
+        await m.answer("✅ پاسخ ارسال شد.")
+    except Exception as e:
+        await m.answer(f"❌ خطا در ارسال پاسخ: {e}")
+
+
 @dp.message(Command("listgroups"))
 async def cmd_listgroups(m: Message):
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -987,6 +1003,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
