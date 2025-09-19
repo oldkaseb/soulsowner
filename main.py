@@ -93,6 +93,10 @@ class AdminReply(StatesGroup):
 class SetRules(StatesGroup):
     waiting_for_text = State()
 
+class GroupReply(StatesGroup):
+    waiting_for_link = State()
+    waiting_for_text = State()
+
 # -------------------- DB --------------------
 @dataclass
 class User:
@@ -605,19 +609,51 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
     await m.answer(f"✅ ارسال شد برای {sent} گروه.")
 
 @dp.message(Command("replygroup"))
-async def cmd_replygroup(m: Message, command: CommandObject):
+async def cmd_replygroup(m: Message, state: FSMContext):
     if not await require_admin_msg(m):
         return
-    args = command.args.strip().split(maxsplit=1)
-    if len(args) != 2 or not args[0].isdigit():
-        return await m.answer("فرمت: /replygroup <message_id> <متن>")
-    msg_id = int(args[0])
-    text = args[1]
+    await state.set_state(GroupReply.waiting_for_link)
+    await m.answer("لینک پیام گروه را ارسال کنید. لغو: /cancel")
+
+@dp.message(GroupReply.waiting_for_link)
+async def on_link_received(m: Message, state: FSMContext):
+    if not await require_admin_msg(m):
+        return
+    link = m.text.strip()
+    parts = link.split("/")
+    if len(parts) < 5 or not parts[-1].isdigit():
+        return await m.answer("❌ لینک نامعتبر است. فرمت صحیح: https://t.me/groupname/12345")
+
+    msg_id = int(parts[-1])
+    await state.update_data(message_id=msg_id)
+    await state.set_state(GroupReply.waiting_for_content)
+    await m.answer("✅ لینک دریافت شد. حالا رسانه یا متن پاسخ را ارسال کنید. لغو: /cancel")
+
+@dp.message(GroupReply.waiting_for_content)
+async def on_reply_content(m: Message, state: FSMContext):
+    if not await require_admin_msg(m):
+        return
+    data = await state.get_data()
+    msg_id = data.get("message_id")
+    GROUP_CHAT_ID = -100xxxxxxxxxx  # آیدی عددی گروه خصوصی
+
     try:
-        await bot.send_message(chat_id=GROUP_CHAT_ID, text=text, reply_to_message_id=msg_id)
+        # ارسال رسانه با copy_message
+        await bot.copy_message(
+            chat_id=GROUP_CHAT_ID,
+            from_chat_id=m.chat.id,
+            message_id=m.message_id,
+            reply_to_message_id=msg_id
+        )
         await m.answer("✅ پاسخ ارسال شد.")
     except Exception as e:
         await m.answer(f"❌ خطا در ارسال پاسخ: {e}")
+    await state.clear()
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(m: Message, state: FSMContext):
+    await state.clear()
+    await m.answer("⛔ عملیات لغو شد.")
 
 
 @dp.message(Command("listgroups"))
@@ -1003,6 +1039,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
