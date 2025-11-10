@@ -16,11 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 
-import re
-
 import asyncpg
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ParseMode, ChatMemberStatus
+from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -140,16 +138,6 @@ CREATE TABLE IF NOT EXISTS groups (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS welcome_settings (
-    group_id      BIGINT PRIMARY KEY,
-    is_enabled    BOOLEAN NOT NULL DEFAULT TRUE,
-    message_type  TEXT NOT NULL,
-    file_id       TEXT,
-    text_or_caption TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
 
@@ -335,48 +323,6 @@ async def list_groups(limit: int = 50) -> List[Tuple[int, str]]:
         )
     return [(r[0], r[1]) for r in rows]
 
-async def get_welcome_setting(group_id: int) -> Optional[Dict[str, Any]]:
-    """دریافت تنظیمات خوشامدگویی گروه."""
-    assert DB_POOL is not None
-    async with DB_POOL.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT is_enabled, message_type, file_id, text_or_caption FROM welcome_settings WHERE group_id=$1",
-            group_id
-        )
-    return dict(row) if row else None
-
-async def upsert_welcome_setting(
-    group_id: int,
-    is_enabled: bool,
-    message_type: str,
-    file_id: Optional[str],
-    text_or_caption: Optional[str],
-):
-    """درج یا به‌روزرسانی تنظیمات خوشامدگویی."""
-    assert DB_POOL is not None
-    async with DB_POOL.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO welcome_settings(group_id, is_enabled, message_type, file_id, text_or_caption, updated_at)
-               VALUES($1,$2,$3,$4,$5,NOW())
-               ON CONFLICT (group_id) DO UPDATE
-                 SET is_enabled=EXCLUDED.is_enabled,
-                     message_type=EXCLUDED.message_type,
-                     file_id=EXCLUDED.file_id,
-                     text_or_caption=EXCLUDED.text_or_caption,
-                     updated_at=NOW()""",
-            group_id, is_enabled, message_type, file_id, text_or_caption,
-        )
-
-async def set_welcome_enabled(group_id: int, is_enabled: bool):
-    """فعال/غیرفعال کردن خوشامدگویی."""
-    assert DB_POOL is not None
-    async with DB_POOL.acquire() as conn:
-        res = await conn.execute(
-            "UPDATE welcome_settings SET is_enabled=$1, updated_at=NOW() WHERE group_id=$2",
-            is_enabled, group_id
-        )
-    return res.endswith("1") # اگر یک سطر تغییر کرده باشد یعنی تنظیماتی قبلاً وجود داشته.
-
 # -------------------- Keyboards --------------------
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -440,32 +386,6 @@ async def disable_markup(call: CallbackQuery):
     except Exception:
         pass
 
-def extract_message_data(m: Message) -> Dict[str, Any]:
-    """استخراج نوع پیام، file_id و متن/کپشن برای ذخیره در تنظیمات."""
-    data = {
-        "response_type": None,
-        "file_id": None,
-        "response_text": m.caption or m.text,
-    }
-
-    if m.text:
-        data["response_type"] = "text"
-    elif m.photo:
-        data["response_type"] = "photo"
-        data["file_id"] = m.photo[-1].file_id
-    elif m.video:
-        data["response_type"] = "video"
-        data["file_id"] = m.video.file_id
-    elif m.animation:
-        data["response_type"] = "animation"
-        data["file_id"] = m.animation.file_id
-    elif m.voice:
-        data["response_type"] = "voice"
-        data["file_id"] = m.voice.file_id
-    # می توانید انواع دیگر (مثل document, audio) را نیز اضافه کنید.
-
-    return data
-
 # --- admin check: message vs callback ---
 async def _check_and_seed_admin(user_id: int) -> bool:
     if user_id in ADMIN_IDS_SEED:
@@ -524,13 +444,6 @@ async def _send_media_group(bot: Bot, chat_id: int, items: List[Dict[str, Any]],
     if media:
         await bot.send_media_group(chat_id, media)
 
-# ... در نزدیکی سایر توابع کمکی
-async def is_group_admin(m: Message, bot: Bot) -> bool:
-    """بررسی می‌کند که آیا کاربر ادمین یا سازنده گروه است."""
-    if m.chat.type not in ("group", "supergroup"):
-        return False
-    member = await bot.get_chat_member(m.chat.id, m.from_user.id)
-    return member.status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR)
 # -------------------- Bot & Dispatcher --------------------
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -1071,171 +984,6 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
     await log_message(m.from_user.id, None, "user_to_admin", m.caption or m.text or m.content_type)
     await state.clear()
     await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
-  
-# -------------------- Welcome Commands (Groups) --------------------
-
-# /setwel: تنظیم پیام خوشامدگویی
-@dp.message(Command("setwel"), F.chat.type.in_({"group", "supergroup"}))
-async def cmd_setwel(m: Message, bot: Bot):
-    if not await is_group_admin(m, bot):
-        return await m.reply("⛔ این دستور مخصوص ادمین‌های گروه است.")
-        
-    if not m.reply_to_message:
-        return await m.reply("لطفاً برای تنظیم پیام خوشامدگویی، روی یک پیام ریپلای کنید.")
-
-    welcome_message_data = extract_message_data(m.reply_to_message)
-    
-    # اگر پیام فقط رسانه بدون کپشن باشد، یک متن پیش‌فرض در نظر می‌گیریم
-    text_or_caption = welcome_message_data.get("response_text")
-    if not text_or_caption:
-        # استفاده از منشن قابل کلیک برای MarkdownV2 در پیام پیش‌فرض
-        text_or_caption = "[MENTION](tg://user?id={user_id}) خوش آمدی!"
-        
-    if not welcome_message_data["response_type"]:
-        return await m.reply("❌ این نوع پیام برای خوشامدگویی پشتیبانی نمی‌شود.")
-
-    await upsert_welcome_setting(
-        group_id=m.chat.id,
-        is_enabled=True,
-        message_type=welcome_message_data["response_type"],
-        file_id=welcome_message_data["file_id"],
-        text_or_caption=text_or_caption # ذخیره متن اصلی برای جایگزینی
-    )
-    
-    await m.reply(
-        "✅ پیام خوشامدگویی با موفقیت تنظیم و فعال شد.\n"
-        "متغیر `MENTION` برای منشن کردن کاربر جدید در دسترس است."
-    )
-
-# /welon: فعال‌سازی خوشامدگویی
-@dp.message(Command("welon"), F.chat.type.in_({"group", "supergroup"}))
-async def cmd_welon(m: Message, bot: Bot):
-    if not await is_group_admin(m, bot):
-        return await m.reply("⛔ این دستور مخصوص ادمین‌های گروه است.")
-
-    setting = await get_welcome_setting(m.chat.id)
-    if not setting:
-        return await m.reply("⚠️ هنوز هیچ پیام خوشامدگویی تنظیم نشده است! لطفاً ابتدا از دستور /setwel استفاده کنید.")
-
-    await set_welcome_enabled(m.chat.id, True)
-    await m.reply("✅ خوشامدگویی خودکار فعال شد.")
-
-# /weloff: غیرفعال‌سازی خوشامدگویی
-@dp.message(Command("weloff"), F.chat.type.in_({"group", "supergroup"}))
-async def cmd_weloff(m: Message, bot: Bot):
-    if not await is_group_admin(m, bot):
-        return await m.reply("⛔ این دستور مخصوص ادمین‌های گروه است.")
-
-    if await set_welcome_enabled(m.chat.id, False):
-        await m.reply("❌ خوشامدگویی خودکار غیرفعال شد.")
-    else:
-        await m.reply("⚠️ هنوز هیچ پیام خوشامدگویی تنظیم نشده است!")
-
-# -------------------- New Member Welcome Handler --------------------
-
-def escape_markdown_v2(text: str) -> str:
-    """امن‌سازی کاراکرهای خاص برای ParseMode.MARKDOWN_V2"""
-    if not text:
-        return ""
-    # لیست کاراکرهایی که باید Escape شوند
-    escape_chars = r"_*[]()~`>#+-=|{}.!"
-    # جایگزینی با پیشوند بک‌اسلش
-    return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
-
-
-@dp.message(F.chat.type.in_({"group", "supergroup"}))
-async def greet_new_members(m: Message, bot: Bot):
-    
-    # 🚨 چک کردن دستی فیلد new_chat_members
-    if not m.new_chat_members:
-        return # اگر پیام حاوی اطلاعات عضو جدید نباشد، خارج می‌شود
-        
-    logging.info(f"✅ [WELC_START] Received New Member Update in Group: {m.chat.id}")
-
-    # به‌روزرسانی اطلاعات گروه
-    await upsert_group(
-        chat_id=m.chat.id,
-        title=getattr(m.chat, "title", None),
-        username=getattr(m.chat, "username", None),
-        active=True
-    )
-    
-    # 🚧 حذف پیام سرویس (عضو جدید) بعد از ۵ ثانیه
-    asyncio.create_task(_auto_delete(m.chat.id, m.message_id, delay=5))
-
-    for new_user in m.new_chat_members:
-        # ۱. جلوگیری از خوشامدگویی به خود ربات (در صورت اضافه شدن)
-        if new_user.id == bot.id:
-            continue
-            
-        setting = await get_welcome_setting(m.chat.id)
-
-        # ۲. چک کردن فعال بودن خوشامدگویی
-        if not setting or not setting["is_enabled"]:
-            continue
-        
-        # ... در تابع greet_new_members، داخل حلقه for new_user in m.new_chat_members:
-
-        # --- منطق ایمن ساخت پیام ---
-        # ۱. اِسکِیپ کردن نام کاربر قبل از ساخت لینک
-        safe_first_name = escape_markdown_v2(new_user.first_name or "کاربر جدید")
-        user_mention_markdown_link = f"[{safe_first_name}](tg://user?id={new_user.id})"
-        
-        # تعریف یک Placeholder که احتمالاً در پیام وجود ندارد
-        MENTION_PLACEHOLDER = "|||USER_MENTION_LINK|||"
-
-        # ۲. جایگزینی MENTION با Placeholder در متن پایه
-        welcome_text = setting["text_or_caption"]
-        welcome_text = welcome_text.replace("{user_id}", str(new_user.id))
-        
-        # نکته کلیدی: قبل از escape کردن بقیه متن، MENTION را با Placeholder جایگزین کنید.
-        welcome_text_with_placeholder = welcome_text.replace("MENTION", MENTION_PLACEHOLDER)
-        
-        # ۳. تقسیم متن بر اساس Placeholder
-        parts = welcome_text_with_placeholder.split(MENTION_PLACEHOLDER)
-        
-        final_welcome_text = ""
-        # ۴. Escape کردن هر بخش ساده و الحاق لینک منشن در محل Placeholder
-        for i, part in enumerate(parts):
-            final_welcome_text += escape_markdown_v2(part) # فقط متن خام را Escape کن
-            if i < len(parts) - 1:
-                final_welcome_text += user_mention_markdown_link # لینک منشن را بدون Escape اضافه کن
-        # ---------------------------
-
-        file_id = setting["file_id"]
-        message_type = setting["message_type"]
-        
-        sent_message = None
-        try:
-            # بررسی دسترسی ربات به پیام (اگر پیام Service Message باشد)
-            if m.chat.type == "supergroup":
-                chat_member = await bot.get_chat_member(m.chat.id, bot.id)
-                if chat_member.status in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED):
-                    logging.warning(f"ربات در گروه {m.chat.id} ادمین یا عضو نیست.")
-                    return # خروج از تابع اگر ربات دسترسی نداشته باشد.
-
-
-            # ارسال پیام بر اساس نوع ذخیره شده
-            if message_type == "text":
-                sent_message = await m.answer(final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
-            elif message_type == "photo" and file_id:
-                sent_message = await m.answer_photo(file_id, caption=final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
-            elif message_type == "video" and file_id:
-                sent_message = await m.answer_video(file_id, caption=final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
-            elif message_type == "animation" and file_id:
-                sent_message = await m.answer_animation(file_id, caption=final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
-            elif message_type == "voice" and file_id:
-                # پیام voice کپشن ندارد، اما از answer_voice استفاده می‌کنیم
-                sent_message = await m.answer_voice(file_id, caption=None)
-                
-            
-            if sent_message:
-                # حذف پیام خوشامدگویی بعد از ۹۰ ثانیه
-                asyncio.create_task(_auto_delete(sent_message.chat.id, sent_message.message_id, delay=90))
-
-        except Exception as e:
-            # این خطا به دلیل عدم توانایی ربات در ارسال (مثلا دسترسی نداشتن) یا مشکل در ParseMode است
-            logging.error(f"❌ خطای کشف‌شده در ارسال خوشامدگویی به کاربر {new_user.id} در گروه {m.chat.id}: {e}", exc_info=True)
 
 # -------------------- Group behavior & registration --------------------
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
@@ -1273,8 +1021,6 @@ async def private_fallback(m: Message, state: FSMContext):
         return
     await m.answer("برای شروع از /menu استفاده کنید.")
 
-# ... بعد از cmd_cancel و سایر دستورات
-
 # -------------------- Entrypoint --------------------
 async def main():
     global BOT_USERNAME, DB_POOL
@@ -1283,7 +1029,7 @@ async def main():
     BOT_USERNAME = me.username or ""
     logging.info(f"Bot connected as @{BOT_USERNAME}")
     try:
-        await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
         if DB_POOL:
             await DB_POOL.close()
@@ -1293,14 +1039,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
-
-
-
-
-
-
-
-
 
 
 
