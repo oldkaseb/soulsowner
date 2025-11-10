@@ -1069,45 +1069,7 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
     await log_message(m.from_user.id, None, "user_to_admin", m.caption or m.text or m.content_type)
     await state.clear()
     await m.answer("✅ درخواست شما برای ادمین‌ها ارسال شد.", reply_markup=send_again_kb())
-
-# -------------------- Group behavior & registration --------------------
-@dp.message(F.chat.type.in_({"group", "supergroup"}))
-async def group_gate(m: Message):
-    await upsert_group(
-        chat_id=m.chat.id,
-        title=getattr(m.chat, "title", None),
-        username=getattr(m.chat, "username", None),
-        active=True
-    )
-
-    text = (m.text or m.caption or "")
-    if contains_malek(text):
-        btns = None
-        if BOT_USERNAME:
-            btns = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="پیام به منشی مالک",
-                    url=f"https://t.me/{BOT_USERNAME}?start=start"
-                )]
-            ])
-
-        # ⬇️ پیام ربات
-        sent = await m.reply(
-            "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
-            reply_markup=btns
-        )
-        # ⬇️ حذف خودکار همون پیام بعد از ۳۰ ثانیه
-        asyncio.create_task(_auto_delete(sent.chat.id, sent.message_id, delay=30))
-
-# فقط پی‌وی: فالبک غیر دستوری (وقتی در حالت خاصی نیستیم)
-@dp.message(F.chat.type == "private", F.text, ~F.text.regexp(r"^/"))
-async def private_fallback(m: Message, state: FSMContext):
-    if await state.get_state():
-        return
-    await m.answer("برای شروع از /menu استفاده کنید.")
-
-# ... بعد از cmd_cancel و سایر دستورات
-
+  
 # -------------------- Welcome Commands (Groups) --------------------
 
 # /setwel: تنظیم پیام خوشامدگویی
@@ -1246,6 +1208,44 @@ async def greet_new_members(m: Message, bot: Bot):
         except Exception as e:
             logging.error(f"خطا در ارسال پیام خوشامدگویی در گروه {m.chat.id}: {e}")
 
+# -------------------- Group behavior & registration --------------------
+@dp.message(F.chat.type.in_({"group", "supergroup"}))
+async def group_gate(m: Message):
+    await upsert_group(
+        chat_id=m.chat.id,
+        title=getattr(m.chat, "title", None),
+        username=getattr(m.chat, "username", None),
+        active=True
+    )
+
+    text = (m.text or m.caption or "")
+    if contains_malek(text):
+        btns = None
+        if BOT_USERNAME:
+            btns = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="پیام به منشی مالک",
+                    url=f"https://t.me/{BOT_USERNAME}?start=start"
+                )]
+            ])
+
+        # ⬇️ پیام ربات
+        sent = await m.reply(
+            "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
+            reply_markup=btns
+        )
+        # ⬇️ حذف خودکار همون پیام بعد از ۳۰ ثانیه
+        asyncio.create_task(_auto_delete(sent.chat.id, sent.message_id, delay=30))
+
+# فقط پی‌وی: فالبک غیر دستوری (وقتی در حالت خاصی نیستیم)
+@dp.message(F.chat.type == "private", F.text, ~F.text.regexp(r"^/"))
+async def private_fallback(m: Message, state: FSMContext):
+    if await state.get_state():
+        return
+    await m.answer("برای شروع از /menu استفاده کنید.")
+
+# ... بعد از cmd_cancel و سایر دستورات
+
 # -------------------- Entrypoint --------------------
 async def main():
     global BOT_USERNAME, DB_POOL
@@ -1254,7 +1254,7 @@ async def main():
     BOT_USERNAME = me.username or ""
     logging.info(f"Bot connected as @{BOT_USERNAME}")
     try:
-        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query", "chat_member"])
     finally:
         if DB_POOL:
             await DB_POOL.close()
@@ -1264,6 +1264,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
