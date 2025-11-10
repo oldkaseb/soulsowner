@@ -1174,24 +1174,32 @@ async def greet_new_members(m: Message, bot: Bot):
         if not setting or not setting["is_enabled"]:
             continue
         
+        # ... در تابع greet_new_members، داخل حلقه for new_user in m.new_chat_members:
+
         # --- منطق ایمن ساخت پیام ---
-        # ساخت منشن کاربر با Escape کردن نام
+        # ۱. اِسکِیپ کردن نام کاربر قبل از ساخت لینک
         safe_first_name = escape_markdown_v2(new_user.first_name or "کاربر جدید")
         user_mention_markdown_link = f"[{safe_first_name}](tg://user?id={new_user.id})"
         
         # تعریف یک Placeholder که احتمالاً در پیام وجود ندارد
         MENTION_PLACEHOLDER = "|||USER_MENTION_LINK|||"
 
-        # ۱. جایگزینی MENTION با Placeholder در متن پایه
+        # ۲. جایگزینی MENTION با Placeholder در متن پایه
         welcome_text = setting["text_or_caption"]
         welcome_text = welcome_text.replace("{user_id}", str(new_user.id))
-        welcome_text = welcome_text.replace("MENTION", MENTION_PLACEHOLDER)
         
-        # ۲. Escape کردن کل متن به جز Placeholder
-        safe_text = escape_markdown_v2(welcome_text)
+        # نکته کلیدی: قبل از escape کردن بقیه متن، MENTION را با Placeholder جایگزین کنید.
+        welcome_text_with_placeholder = welcome_text.replace("MENTION", MENTION_PLACEHOLDER)
         
-        # ۳. جایگزینی Placeholder با لینک نهایی MarkdownV2
-        final_welcome_text = safe_text.replace(MENTION_PLACEHOLDER, user_mention_markdown_link)
+        # ۳. تقسیم متن بر اساس Placeholder
+        parts = welcome_text_with_placeholder.split(MENTION_PLACEHOLDER)
+        
+        final_welcome_text = ""
+        # ۴. Escape کردن هر بخش ساده و الحاق لینک منشن در محل Placeholder
+        for i, part in enumerate(parts):
+            final_welcome_text += escape_markdown_v2(part) # فقط متن خام را Escape کن
+            if i < len(parts) - 1:
+                final_welcome_text += user_mention_markdown_link # لینک منشن را بدون Escape اضافه کن
         # ---------------------------
 
         file_id = setting["file_id"]
@@ -1285,6 +1293,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
