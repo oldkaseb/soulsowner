@@ -18,7 +18,7 @@ from typing import Optional, List, Tuple, Dict, Any
 
 import asyncpg
 from aiogram import Bot, Dispatcher, F
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
@@ -29,7 +29,6 @@ from aiogram.types import (
     CallbackQuery,
     InputMediaPhoto,
     InputMediaVideo,
-    ChatMemberStatus,
 )
 from aiogram.client.default import DefaultBotProperties
 
@@ -1265,6 +1264,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
