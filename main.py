@@ -1134,12 +1134,13 @@ async def cmd_weloff(m: Message, bot: Bot):
 # -------------------- New Member Welcome Handler --------------------
 
 def escape_markdown_v2(text: str) -> str:
-    """امن‌سازی کاراکترهای خاص برای ParseMode.MARKDOWN_V2"""
+    """امن‌سازی کاراکرهای خاص برای ParseMode.MARKDOWN_V2"""
     if not text:
         return ""
-    # لیست کاراکترهایی که باید Escape شوند
+    # لیست کاراکرهایی که باید Escape شوند
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     # جایگزینی با پیشوند بک‌اسلش
+    import re
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
 
 
@@ -1154,61 +1155,74 @@ async def greet_new_members(m: Message, bot: Bot):
         active=True
     )
 
+    # 🚧 حذف پیام سرویس (عضو جدید) بعد از ۵ ثانیه
+    asyncio.create_task(_auto_delete(m.chat.id, m.message_id, delay=5))
+
     for new_user in m.new_chat_members:
-        # از خوشامدگویی به خود ربات جلوگیری می‌کنیم
+        # ۱. جلوگیری از خوشامدگویی به خود ربات (در صورت اضافه شدن)
         if new_user.id == bot.id:
             continue
             
         setting = await get_welcome_setting(m.chat.id)
 
+        # ۲. چک کردن فعال بودن خوشامدگویی
         if not setting or not setting["is_enabled"]:
             continue
-            
-        # ساخت منشن کاربر با استفاده از ParseMode.MARKDOWN_V2
+        
+        # --- منطق ایمن ساخت پیام ---
+        # ساخت منشن کاربر با Escape کردن نام
         safe_first_name = escape_markdown_v2(new_user.first_name or "کاربر جدید")
-        user_mention = f"[{safe_first_name}](tg://user?id={new_user.id})"
+        user_mention_markdown_link = f"[{safe_first_name}](tg://user?id={new_user.id})"
         
-        # جایگزینی متغیر MENTION
-        # چون text_or_caption با HTML ذخیره می‌شود (از SetRules) باید آن را امن کنیم
-        # اگر کاربر با /setwel ریپلای کند، متن خام ذخیره می‌شود و نیازی به تبدیل HTML به Markdown نیست.
-        
-        # برای سادگی، فرض می‌کنیم متنی که در /setwel ذخیره شده می‌تواند حاوی کاراکترهای نیاز به escape باشد.
-        base_text = setting["text_or_caption"]
-        
-        # اگر پیام پیش‌فرض در /setwel ست شده باشد، حاوی متغیر {user_id} است 
-        # که باید آن را هم با آیدی کاربر جایگزین کنیم
-        base_text = base_text.replace("{user_id}", str(new_user.id))
+        # تعریف یک Placeholder که احتمالاً در پیام وجود ندارد
+        MENTION_PLACEHOLDER = "|||USER_MENTION_LINK|||"
 
-        # استفاده از escape_markdown_v2 روی کل متن (نه فقط روی base_text، چون base_text می‌تواند
-        # حاوی HTML از /setrules باشد که اینجا آن را نادیده می‌گیریم)
-        welcome_text = escape_markdown_v2(base_text).replace("MENTION", user_mention)
-
+        # ۱. جایگزینی MENTION با Placeholder در متن پایه
+        welcome_text = setting["text_or_caption"]
+        welcome_text = welcome_text.replace("{user_id}", str(new_user.id))
+        welcome_text = welcome_text.replace("MENTION", MENTION_PLACEHOLDER)
+        
+        # ۲. Escape کردن کل متن به جز Placeholder
+        safe_text = escape_markdown_v2(welcome_text)
+        
+        # ۳. جایگزینی Placeholder با لینک نهایی MarkdownV2
+        final_welcome_text = safe_text.replace(MENTION_PLACEHOLDER, user_mention_markdown_link)
+        # ---------------------------
 
         file_id = setting["file_id"]
         message_type = setting["message_type"]
         
         sent_message = None
         try:
+            # بررسی دسترسی ربات به پیام (اگر پیام Service Message باشد)
+            if m.chat.type == "supergroup":
+                chat_member = await bot.get_chat_member(m.chat.id, bot.id)
+                if chat_member.status in (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED):
+                    logging.warning(f"ربات در گروه {m.chat.id} ادمین یا عضو نیست.")
+                    return # خروج از تابع اگر ربات دسترسی نداشته باشد.
+
+
+            # ارسال پیام بر اساس نوع ذخیره شده
             if message_type == "text":
-                sent_message = await m.answer(welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
+                sent_message = await m.answer(final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
             elif message_type == "photo" and file_id:
-                sent_message = await m.answer_photo(file_id, caption=welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
+                sent_message = await m.answer_photo(file_id, caption=final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
             elif message_type == "video" and file_id:
-                sent_message = await m.answer_video(file_id, caption=welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
+                sent_message = await m.answer_video(file_id, caption=final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
             elif message_type == "animation" and file_id:
-                sent_message = await m.answer_animation(file_id, caption=welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
+                sent_message = await m.answer_animation(file_id, caption=final_welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
             elif message_type == "voice" and file_id:
-                sent_message = await m.answer_voice(file_id, caption=welcome_text, parse_mode=ParseMode.MARKDOWN_V2)
+                # پیام voice کپشن ندارد، اما از answer_voice استفاده می‌کنیم
+                sent_message = await m.answer_voice(file_id, caption=None)
                 
-            # در نهایت، پیام خوشامدگویی و پیام "Added" خود تلگرام را حذف می‌کنیم.
+            
             if sent_message:
-                # حذف پیام خوشامدگویی بعد از ۶۰ ثانیه
+                # حذف پیام خوشامدگویی بعد از ۹۰ ثانیه
                 asyncio.create_task(_auto_delete(sent_message.chat.id, sent_message.message_id, delay=90))
-                # حذف پیام سرویس (عضو جدید) بعد از ۵ ثانیه
-                asyncio.create_task(_auto_delete(m.chat.id, m.message_id, delay=5))
 
         except Exception as e:
-            logging.error(f"خطا در ارسال پیام خوشامدگویی در گروه {m.chat.id}: {e}")
+            # این خطا به دلیل عدم توانایی ربات در ارسال (مثلا دسترسی نداشتن) یا مشکل در ParseMode است
+            logging.error(f"❌ خطای کشف‌شده در ارسال خوشامدگویی به کاربر {new_user.id} در گروه {m.chat.id}: {e}", exc_info=True)
 
 # -------------------- Group behavior & registration --------------------
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
@@ -1266,6 +1280,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
