@@ -1140,13 +1140,18 @@ def escape_markdown_v2(text: str) -> str:
     # لیست کاراکرهایی که باید Escape شوند
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     # جایگزینی با پیشوند بک‌اسلش
-    import re
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
 
 
-@dp.message(F.chat.type.in_({"group", "supergroup"}), F.new_chat_members)
+@dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def greet_new_members(m: Message, bot: Bot):
+    
+    # 🚨 چک کردن دستی فیلد new_chat_members
+    if not m.new_chat_members:
+        return # اگر پیام حاوی اطلاعات عضو جدید نباشد، خارج می‌شود
+        
     logging.info(f"✅ [WELC_START] Received New Member Update in Group: {m.chat.id}")
+
     # به‌روزرسانی اطلاعات گروه
     await upsert_group(
         chat_id=m.chat.id,
@@ -1154,7 +1159,7 @@ async def greet_new_members(m: Message, bot: Bot):
         username=getattr(m.chat, "username", None),
         active=True
     )
-
+    
     # 🚧 حذف پیام سرویس (عضو جدید) بعد از ۵ ثانیه
     asyncio.create_task(_auto_delete(m.chat.id, m.message_id, delay=5))
 
@@ -1280,6 +1285,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
