@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 
+import re
+
 import asyncpg
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode, ChatMemberStatus
@@ -1264,6 +1266,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
