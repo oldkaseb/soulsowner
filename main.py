@@ -1146,7 +1146,7 @@ def escape_markdown_v2(text: str) -> str:
 
 @dp.message(F.chat.type.in_({"group", "supergroup"}), F.new_chat_members)
 async def greet_new_members(m: Message, bot: Bot):
-    
+    logging.info(f"✅ [WELC_START] Received New Member Update in Group: {m.chat.id}")
     # به‌روزرسانی اطلاعات گروه
     await upsert_group(
         chat_id=m.chat.id,
@@ -1280,6 +1280,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
+
 
 
 
