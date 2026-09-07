@@ -5,15 +5,15 @@ Telegram Bot – aiogram v3.7 + asyncpg (single file)
 ENV (Railway):
   BOT_TOKEN="..."
   DATABASE_URL="postgresql://user:pass@host:port/dbname"
-  ADMIN_ID="123456, 987654"  # یک یا چند آیدی با کاما/فاصله
+  ADMIN_ID="123456, 987654"
 """
 
 import asyncio
 import logging
 import os
+import re
 import unicodedata
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 
 import asyncpg
@@ -47,32 +47,29 @@ if not DATABASE_URL:
 DB_POOL: Optional[asyncpg.Pool] = None
 BOT_USERNAME: str = ""
 
-# -------------------- Texts --------------------
-WELCOME_TEXT = """سلام! 👋
+# -------------------- Texts & Custom Emojis --------------------
+# تگ <tg-emoji emoji-id="..."> برای نمایش کاستوم ایموجی پریمیوم استفاده می‌شود
+WELCOME_TEXT = """سلام! <tg-emoji emoji-id="5328396341235570083">👋</tg-emoji>
 یکی از بخش‌ها را انتخاب کنید تا دقیق‌تر بفهمم چه کاری دارید:"""
-MAIN_MENU_TEXT = "یکی از گزینه‌ها را انتخاب کنید:"
+
+MAIN_MENU_TEXT = "<tg-emoji emoji-id="5328396341235570083">👇</tg-emoji> یکی از گزینه‌ها را انتخاب کنید:"
 
 # Buttons
-BTN_SECTION_BOTS   = "🤖 گفت‌وگو درباره ربات‌ها"
-BTN_SECTION_SOULS  = "💬 گروه Souls"
-BTN_SECTION_VSERV  = "🛍️ خدمات مجازی"
-BTN_SECTION_FREE   = "🗣️ گفت‌وگوی آزاد"
+BTN_SECTION_ABOUT = "👤 درباره من"
+BTN_SECTION_BOTS  = "🤖 گفت‌وگو درباره ربات‌ها"
+BTN_SECTION_VSERV = "🛍️ خدمات مجازی"
+BTN_SECTION_FREE  = "🗣️ گفت‌وگوی آزاد"
 
-BTN_GROUP_ADMIN_CHAT = "درخواست ادمین چت"
-BTN_GROUP_ADMIN_CALL = "درخواست ادمین کال"
-
-BTN_SEND_REQUEST = "✅ می‌پذیرم و ارسال درخواست"   # فقط برای Souls
 BTN_CANCEL       = "❌ انصراف"
-BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"          # بعد از ارسال موفق کاربر
-BTN_QUICK_SEND   = "✉️ ارسال پیام"               # برای bots/vserv/free
+BTN_SEND_AGAIN   = "✉️ ارسال پیام مجدد"
+BTN_QUICK_SEND   = "✉️ ارسال پیام"
 
 BTN_REPLY        = "✉️ پاسخ"
-BTN_REPLY_AGAIN  = "✉️ پاسخِ مجدد"                # بعد از ارسال موفق ادمین
+BTN_REPLY_AGAIN  = "✉️ پاسخِ مجدد"
 
 # Callback data prefixes
 CB_MAIN    = "main"
-CB_SEC     = "sec"      # sec|bots / sec|souls / sec|vserv / sec|free
-CB_SOULS   = "souls"    # souls|chat / souls|call
+CB_SEC     = "sec"      # sec|about / sec|bots / sec|vserv / sec|free
 CB_ACTION  = "act"      # act|send|<kind> or act|cancel|<kind>
 CB_AGAIN   = "again"    # again|start
 CB_REPLY   = "reply"    # reply|<user_id>
@@ -116,8 +113,8 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS rules (
-    section TEXT NOT NULL,     -- souls|bots|vserv
-    kind    TEXT NOT NULL,     -- chat|call|general
+    section TEXT NOT NULL,     -- about|bots|vserv
+    kind    TEXT NOT NULL,     -- general
     text    TEXT NOT NULL,
     PRIMARY KEY (section, kind)
 );
@@ -142,8 +139,7 @@ CREATE TABLE IF NOT EXISTS groups (
 """
 
 DEFAULT_RULES: List[Tuple[str, str, str]] = [
-    ("souls", "chat", "قوانین چت گروه Souls: محترم باشید و از اسپم خودداری کنید."),
-    ("souls", "call", "قوانین کال گروه Souls: هماهنگی زمان و رعایت ادب الزامی است."),
+    ("about", "general", "به بخش درباره من خوش آمدید. اطلاعاتی ثبت نشده است."),
     ("bots",  "general", "برای گفت‌وگو درباره ربات‌ها: نام ربات، مشکل/درخواست و اسکرین‌شات را ذکر کنید."),
     ("vserv", "general", "لطفاً قبل از سفارش، نوع سرویس، جزئیات و زمان‌بندی را واضح بنویسید."),
 ]
@@ -164,37 +160,13 @@ async def init_db():
     DB_POOL = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     async with DB_POOL.acquire() as conn:
         await conn.execute(CREATE_SQL)
-        # seed default rules
         for section, kind, text in DEFAULT_RULES:
             await conn.execute(
                 """INSERT INTO rules(section, kind, text) VALUES($1,$2,$3)
                    ON CONFLICT (section, kind) DO NOTHING""",
                 section, kind, text,
             )
-        # load local rules files if exist
-        try:
-            chat_p = Path("rules_chat.txt")
-            call_p = Path("rules_call.txt")
-            if chat_p.exists():
-                t = chat_p.read_text(encoding="utf-8").strip()
-                if t:
-                    await conn.execute(
-                        """INSERT INTO rules(section,kind,text) VALUES('souls','chat',$1)
-                           ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
-                        t,
-                    )
-            if call_p.exists():
-                t = call_p.read_text(encoding="utf-8").strip()
-                if t:
-                    await conn.execute(
-                        """INSERT INTO rules(section,kind,text) VALUES('souls','call',$1)
-                           ON CONFLICT (section,kind) DO UPDATE SET text=EXCLUDED.text""",
-                        t,
-                    )
-        except Exception as e:
-            logging.warning("could not load local rules files: %s", e)
 
-        # seed admins from env
         if ADMIN_ID_RAW:
             nums = [n for n in ADMIN_ID_RAW.replace(",", " ").split() if n.isdigit()]
             for uid in map(int, nums):
@@ -237,7 +209,7 @@ async def _auto_delete(chat_id: int, message_id: int, delay: int = 30):
     try:
         await bot.delete_message(chat_id, message_id)
     except Exception:
-        pass  # دسترسی حذف نداشتیم یا پیام قبلاً پاک شده
+        pass
 
 async def get_user(user_id: int) -> Optional[User]:
     assert DB_POOL is not None
@@ -269,11 +241,11 @@ async def get_admin_ids() -> List[int]:
         rows = await conn.fetch("SELECT user_id FROM users WHERE is_admin=TRUE")
     return [r[0] for r in rows]
 
-async def get_rules(section: str, kind: str) -> str:
+async def get_rules(section: str, kind: str = "general") -> str:
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
         row = await conn.fetchrow("SELECT text FROM rules WHERE section=$1 AND kind=$2", section, kind)
-    return row[0] if row else "هنوز قانونی ثبت نشده است."
+    return row[0] if row else "اطلاعاتی یافت نشد."
 
 async def set_rules(section: str, kind: str, text: str):
     assert DB_POOL is not None
@@ -292,7 +264,6 @@ async def log_message(from_user: int, to_user: Optional[int], direction: str, co
             from_user, to_user, direction, content,
         )
 
-# گروه‌ها
 async def upsert_group(chat_id: int, title: Optional[str], username: Optional[str], active: bool = True):
     assert DB_POOL is not None
     async with DB_POOL.acquire() as conn:
@@ -326,29 +297,21 @@ async def list_groups(limit: int = 50) -> List[Tuple[int, str]]:
 # -------------------- Keyboards --------------------
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        #[InlineKeyboardButton(text=BTN_SECTION_SOULS, callback_data=f"{CB_SEC}|souls")],
+        [InlineKeyboardButton(text=BTN_SECTION_ABOUT, callback_data=f"{CB_SEC}|about")],
         [InlineKeyboardButton(text=BTN_SECTION_BOTS,  callback_data=f"{CB_SEC}|bots")],
         [InlineKeyboardButton(text=BTN_SECTION_VSERV, callback_data=f"{CB_SEC}|vserv")],
         [InlineKeyboardButton(text=BTN_SECTION_FREE,  callback_data=f"{CB_SEC}|free")],
     ])
 
-#def souls_submenu_kb() -> InlineKeyboardMarkup:
-    #return InlineKeyboardMarkup(inline_keyboard=[
-        #[InlineKeyboardButton(text=BTN_GROUP_ADMIN_CHAT, callback_data=f"{CB_SOULS}|chat")],
-        #[InlineKeyboardButton(text=BTN_GROUP_ADMIN_CALL, callback_data=f"{CB_SOULS}|call")],
-        #[InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
-    #])
-
-#def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
-    #return InlineKeyboardMarkup(inline_keyboard=[
-        #[InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_ACTION}|send|{kind}")],
-        #[InlineKeyboardButton(text=BTN_CANCEL,       callback_data=f"{CB_ACTION}|cancel|{kind}")],
-    #])
-
 def quick_send_kb(kind: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_QUICK_SEND, callback_data=f"{CB_ACTION}|send|{kind}")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
+    ])
+
+def back_to_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data=f"{CB_MAIN}|menu")],
     ])
 
 def send_again_kb() -> InlineKeyboardMarkup:
@@ -358,13 +321,11 @@ def send_again_kb() -> InlineKeyboardMarkup:
     ])
 
 def admin_reply_kb(user_id: int) -> InlineKeyboardMarkup:
-    # فقط «پاسخ» در مرحله‌ی اول
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_REPLY, callback_data=f"{CB_REPLY}|{user_id}")],
     ])
 
 def admin_reply_again_kb(user_id: int) -> InlineKeyboardMarkup:
-    # بعد از ارسال موفق، «پاسخِ مجدد»
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=BTN_REPLY_AGAIN, callback_data=f"{CB_REPLY}|{user_id}")],
     ])
@@ -376,9 +337,13 @@ def _normalize_fa(s: str) -> str:
     s = unicodedata.normalize("NFKC", s)
     return s.replace("ي", "ی").replace("ك", "ک")
 
-def contains_malek(text: str) -> bool:
-    t = _normalize_fa(text or "")
-    return "مالک" in t  # شامل حالت‌های «مالکش/مالکشو/...»
+def detect_target_name(text: str) -> Optional[str]:
+    t = _normalize_fa(text or "").lower()
+    targets = ["مالک", "کاسب", "حامد"]
+    for target in targets:
+        if re.search(rf"\b{target}", t):
+            return target
+    return None
 
 async def disable_markup(call: CallbackQuery):
     try:
@@ -386,7 +351,6 @@ async def disable_markup(call: CallbackQuery):
     except Exception:
         pass
 
-# --- admin check: message vs callback ---
 async def _check_and_seed_admin(user_id: int) -> bool:
     if user_id in ADMIN_IDS_SEED:
         u = await get_user(user_id)
@@ -412,20 +376,16 @@ async def require_admin_call(call: CallbackQuery) -> bool:
     return ok
 
 # -------------------- Album helpers --------------------
-# توجه: آلبوم فقط برای photo/video پشتیبانی می‌شود (طبق محدودیت Telegram).
 _album_buffer_users: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_users: Dict[tuple, asyncio.Task] = {}
 _album_buffer_groups: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_groups: Dict[tuple, asyncio.Task] = {}
-
 _album_buffer_u2a: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_u2a: Dict[tuple, asyncio.Task] = {}
-
 _album_buffer_admin_reply: Dict[tuple, List[Dict[str, Any]]] = {}
 _album_tasks_admin_reply: Dict[tuple, asyncio.Task] = {}
 
 def _collect_item_from_message(m: Message) -> Optional[Dict[str, Any]]:
-    # برای آلبوم: photo/video کافیست. سایر انواع به صورت تکی handled می‌شوند.
     if m.photo:
         return {'type': 'photo', 'file_id': m.photo[-1].file_id}
     if m.video:
@@ -494,7 +454,7 @@ async def cmd_seedadmin(m: Message):
     await set_admin(m.from_user.id, True)
     await m.answer("✅ شما به‌عنوان اولین ادمین ثبت شدید. برای دیدن وضعیت، /whoami را بزنید.")
 
-# -------------------- Admin: broadcasts to USERS --------------------
+# -------------------- Admin Commands --------------------
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -504,7 +464,10 @@ async def cmd_broadcast(m: Message, state: FSMContext):
 
 @dp.message(Broadcast.waiting_for_message)
 async def on_broadcast_to_users(m: Message, state: FSMContext):
-    if m.text and m.text.startswith("/") and m.text != "/cancel":
+    if m.text == "/cancel":
+        await state.clear()
+        return await m.answer("⛔ عملیات لغو شد.")
+    if m.text and m.text.startswith("/"):
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
@@ -554,7 +517,6 @@ async def on_broadcast_to_users(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(f"✅ ارسال شد برای {sent} کاربر.")
 
-# -------------------- Admin: broadcasts to GROUPS --------------------
 @dp.message(Command("groupsend"))
 async def cmd_groupsend(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin_msg(m):
@@ -564,7 +526,10 @@ async def cmd_groupsend(m: Message, state: FSMContext):
 
 @dp.message(GroupBroadcast.waiting_for_message)
 async def on_broadcast_to_groups(m: Message, state: FSMContext):
-    if m.text and m.text.startswith("/") and m.text != "/cancel":
+    if m.text == "/cancel":
+        await state.clear()
+        return await m.answer("⛔ عملیات لغو شد.")
+    if m.text and m.text.startswith("/"):
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
@@ -608,53 +573,10 @@ async def on_broadcast_to_groups(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(f"✅ ارسال شد برای {sent} گروه.")
 
-@dp.message(Command("replygroup"))
-async def cmd_replygroup(m: Message, state: FSMContext):
-    if not await require_admin_msg(m):
-        return
-    await state.set_state(GroupReply.waiting_for_link)
-    await m.answer("لینک پیام گروه را ارسال کنید. لغو: /cancel")
-
-@dp.message(GroupReply.waiting_for_link)
-async def on_link_received(m: Message, state: FSMContext):
-    if not await require_admin_msg(m):
-        return
-    link = m.text.strip()
-    parts = link.split("/")
-    if len(parts) < 5 or not parts[-1].isdigit():
-        return await m.answer("❌ لینک نامعتبر است. فرمت صحیح: https://t.me/groupname/12345")
-
-    msg_id = int(parts[-1])
-    await state.update_data(message_id=msg_id)
-    await state.set_state(GroupReply.waiting_for_content)
-    await m.answer("✅ لینک دریافت شد. حالا رسانه یا متن پاسخ را ارسال کنید. لغو: /cancel")
-
-@dp.message(GroupReply.waiting_for_content)
-async def on_reply_content(m: Message, state: FSMContext):
-    if not await require_admin_msg(m):
-        return
-    data = await state.get_data()
-    msg_id = data.get("message_id")
-    GROUP_CHAT_ID = -1002761402663  # آیدی عددی گروه خصوصی
-
-    try:
-        # ارسال رسانه با copy_message
-        await bot.copy_message(
-            chat_id=GROUP_CHAT_ID,
-            from_chat_id=m.chat.id,
-            message_id=m.message_id,
-            reply_to_message_id=msg_id
-        )
-        await m.answer("✅ پاسخ ارسال شد.")
-    except Exception as e:
-        await m.answer(f"❌ خطا در ارسال پاسخ: {e}")
-    await state.clear()
-
 @dp.message(Command("cancel"))
 async def cmd_cancel(m: Message, state: FSMContext):
     await state.clear()
     await m.answer("⛔ عملیات لغو شد.")
-
 
 @dp.message(Command("listgroups"))
 async def cmd_listgroups(m: Message):
@@ -723,7 +645,6 @@ async def cmd_reply(m: Message, state: FSMContext, command: CommandObject):
     await state.update_data(target_id=target_id)
     await m.answer(f"در حال پاسخ به کاربر {target_id}. لطفاً پیام/فایل/آلبوم را بفرستید. لغو: /cancel")
 
-# inline reply (buttons)
 @dp.callback_query(F.data.startswith(f"{CB_REPLY}|"))
 async def cb_reply(call: CallbackQuery, state: FSMContext):
     if call.message.chat.type != "private":
@@ -739,7 +660,10 @@ async def cb_reply(call: CallbackQuery, state: FSMContext):
 
 @dp.message(AdminReply.waiting_for_any)
 async def on_admin_reply_any(m: Message, state: FSMContext):
-    if m.text and m.text.startswith("/") and m.text != "/cancel":
+    if m.text == "/cancel":
+        await state.clear()
+        return await m.answer("⛔ عملیات لغو شد.")
+    if m.text and m.text.startswith("/"):
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
@@ -747,7 +671,6 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
     data = await state.get_data()
     target_id = int(data.get("target_id"))
 
-    # آلبوم (عکس/ویدیو)
     if m.media_group_id:
         key = (m.from_user.id, target_id, m.media_group_id)
         buf = _album_buffer_admin_reply.get(key, [])
@@ -768,7 +691,6 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
         _album_tasks_admin_reply[key] = asyncio.create_task(_flush())
         return
 
-    # تک‌پیام (همه‌ی انواع: ویس/ویدیو نوت/عکس/فیلم/داک/لینک/...)
     try:
         await bot.copy_message(chat_id=target_id, from_chat_id=m.chat.id, message_id=m.message_id)
         await log_message(m.from_user.id, target_id, "admin_to_user", m.caption or m.text or m.content_type)
@@ -777,67 +699,41 @@ async def on_admin_reply_any(m: Message, state: FSMContext):
         await m.answer("❌ ارسال نشد. شاید کاربر پیوی ربات را باز نکرده.")
     await state.clear()
 
-# -------------------- Rules setters --------------------
-class SetRules(StatesGroup):
-    waiting_for_text = State()
-
+# -------------------- Rules & About setters --------------------
 @dp.message(Command("setrules"))
 async def cmd_setrules(m: Message, state: FSMContext, command: CommandObject):
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
     if not command.args:
-        return await m.answer("فرمت: /setrules <section> <kind>\nمثال: /setrules souls chat")
-    args = command.args.strip().split()
-    if len(args) != 2:
-        return await m.answer("باید دقیقاً دو آرگومان بدهید: section و kind (مثلاً: souls chat)")
-    section, kind = args
-    if section not in {"souls", "bots", "vserv"}:
-        return await m.answer("section نامعتبر است. یکی از: souls, bots, vserv")
+        return await m.answer("فرمت: /setrules <section>\nمثال: /setrules bots")
+    section = command.args.strip()
+    if section not in {"about", "bots", "vserv"}:
+        return await m.answer("section نامعتبر است. یکی از: about, bots, vserv")
     await state.set_state(SetRules.waiting_for_text)
-    await state.update_data(section=section, kind=kind)
-    await m.answer(f"متن جدید قوانین برای {section}/{kind} را بفرستید. لغو: /cancel")
+    await state.update_data(section=section, kind="general")
+    await m.answer(f"متن جدید برای {section} را بفرستید. لغو: /cancel")
 
-@dp.message(Command("setchat"))
-async def cmd_setchat(m: Message, state: FSMContext):
+@dp.message(Command("setabout"))
+async def cmd_setabout(m: Message, state: FSMContext):
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
     await state.set_state(SetRules.waiting_for_text)
-    await state.update_data(section="souls", kind="chat")
-    await m.answer("متن قوانین جدید برای «چت گروه Souls» را بفرستید. لغو: /cancel")
-
-@dp.message(Command("setcall"))
-async def cmd_setcall(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin_msg(m):
-        return
-    await state.set_state(SetRules.waiting_for_text)
-    await state.update_data(section="souls", kind="call")
-    await m.answer("متن قوانین جدید برای «کال گروه Souls» را بفرستید. لغو: /cancel")
-
-@dp.message(Command("setvserv"))
-async def cmd_setvserv(m: Message, state: FSMContext):
-    if m.chat.type != "private" or not await require_admin_msg(m):
-        return
-    await state.set_state(SetRules.waiting_for_text)
-    await state.update_data(section="vserv", kind="general")
-    await m.answer("متن قوانین/شرایط «خدمات مجازی» را بفرستید. لغو: /cancel")
+    await state.update_data(section="about", kind="general")
+    await m.answer("متن جدید برای بخش «درباره من» را بفرستید. لغو: /cancel")
 
 @dp.message(SetRules.waiting_for_text)
 async def on_set_rules_text(m: Message, state: FSMContext):
-    if m.text and m.text.startswith("/") and m.text != "/cancel":
+    if m.text == "/cancel":
+        await state.clear()
+        return await m.answer("⛔ عملیات لغو شد.")
+    if m.text and m.text.startswith("/"):
         return
     if m.chat.type != "private" or not await require_admin_msg(m):
         return
     data = await state.get_data()
     await set_rules(data["section"], data["kind"], m.html_text)
     await state.clear()
-    await m.answer("✅ قوانین ذخیره شد.")
-
-@dp.message(Command("cancel"))
-async def cmd_cancel(m: Message, state: FSMContext):
-    if m.chat.type != "private":
-        return
-    await state.clear()
-    await m.answer("لغو شد.")
+    await m.answer("✅ متن جدید ذخیره شد.")
 
 # -------------------- User flows (callbacks) --------------------
 @dp.callback_query(F.data.startswith(f"{CB_MAIN}|"))
@@ -856,8 +752,9 @@ async def on_section(call: CallbackQuery):
     await disable_markup(call)
     _, section = call.data.split("|", 1)
 
-    if section == "souls":
-        await call.message.answer("بخش گروه Souls – نوع درخواست را انتخاب کنید:", reply_markup=souls_submenu_kb())
+    if section == "about":
+        text = await get_rules("about", "general")
+        await call.message.answer(text, reply_markup=back_to_menu_kb())
 
     elif section == "bots":
         rules = await get_rules("bots", "general")
@@ -883,16 +780,6 @@ async def on_section(call: CallbackQuery):
 
     await call.answer()
 
-@dp.callback_query(F.data.startswith(f"{CB_SOULS}|"))
-async def on_souls_kind(call: CallbackQuery):
-    if call.message.chat.type != "private":
-        return
-    await disable_markup(call)
-    _, kind = call.data.split("|", 1)  # chat or call
-    rules = await get_rules("souls", kind)
-    await call.message.answer(rules, reply_markup=after_rules_kb(kind))
-    await call.answer()
-
 @dp.callback_query(F.data.startswith(f"{CB_ACTION}|"))
 async def on_action(call: CallbackQuery, state: FSMContext):
     if call.message.chat.type != "private":
@@ -901,7 +788,7 @@ async def on_action(call: CallbackQuery, state: FSMContext):
     _, action, kind = call.data.split("|", 2)
     if action == "send":
         await state.set_state(SendToAdmin.waiting_for_text)
-        await state.update_data(kind=kind)  # bots/vserv/free/chat/call
+        await state.update_data(kind=kind)
         await call.message.answer("لطفاً پیام/فایل/آلبوم خود را ارسال کنید. لغو: /cancel")
     else:
         await state.clear()
@@ -920,7 +807,10 @@ async def on_send_again(call: CallbackQuery, state: FSMContext):
 # -------------------- User -> Admin message (only in state) --------------------
 @dp.message(SendToAdmin.waiting_for_text)
 async def on_user_message_to_admin(m: Message, state: FSMContext):
-    if m.text and m.text.startswith("/") and m.text != "/cancel":
+    if m.text == "/cancel":
+        await state.clear()
+        return await m.answer("⛔ عملیات لغو شد.")
+    if m.text and m.text.startswith("/"):
         return
     if m.chat.type != "private":
         return
@@ -930,7 +820,7 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         return await m.answer("شما مسدود شده‌اید.")
 
     data = await state.get_data()
-    kind = data.get("kind", "general")  # bots / vserv / free / chat / call
+    kind = data.get("kind", "general")
     admin_ids = await get_admin_ids()
     if not admin_ids:
         return await m.answer("فعلاً ادمینی ثبت نشده.")
@@ -944,7 +834,6 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         f"بخش: {kind}\n\n— برای پاسخ از دکمهٔ زیر استفاده کنید —"
     )
 
-    # آلبوم عکس/ویدیو
     if m.media_group_id:
         key = (m.from_user.id, m.media_group_id)
         buf = _album_buffer_u2a.get(key, [])
@@ -972,7 +861,6 @@ async def on_user_message_to_admin(m: Message, state: FSMContext):
         _album_tasks_u2a[key] = asyncio.create_task(_flush())
         return
 
-    # تک‌پیام (همه انواع)
     for aid in admin_ids:
         try:
             kb = admin_reply_kb(m.from_user.id)
@@ -996,25 +884,25 @@ async def group_gate(m: Message):
     )
 
     text = (m.text or m.caption or "")
-    if contains_malek(text):
+    target_name = detect_target_name(text)
+    
+    if target_name:
         btns = None
         if BOT_USERNAME:
             btns = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="پیام به منشی مالک",
+                    text=f"پیام به منشی {target_name}",
                     url=f"https://t.me/{BOT_USERNAME}?start=start"
                 )]
             ])
 
-        # ⬇️ پیام ربات
         sent = await m.reply(
-            "سلام، من منشی مالک هستم. می‌تونی پیوی من پیام بدی و من به مالک برسونمش.",
+            f"سلام، من منشی {target_name} هستم. می‌تونی پیوی من پیام بدی و من به {target_name} برسونمش.",
             reply_markup=btns
         )
-        # ⬇️ حذف خودکار همون پیام بعد از ۳۰ ثانیه
         asyncio.create_task(_auto_delete(sent.chat.id, sent.message_id, delay=30))
 
-# فقط پی‌وی: فالبک غیر دستوری (وقتی در حالت خاصی نیستیم)
+# -------------------- Private Fallback --------------------
 @dp.message(F.chat.type == "private", F.text, ~F.text.regexp(r"^/"))
 async def private_fallback(m: Message, state: FSMContext):
     if await state.get_state():
@@ -1039,10 +927,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Bot stopped.")
-
-
-
-
-
-
-
