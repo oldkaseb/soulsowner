@@ -326,24 +326,24 @@ async def list_groups(limit: int = 50) -> List[Tuple[int, str]]:
 # -------------------- Keyboards --------------------
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_SECTION_SOULS, callback_data=f"{CB_SEC}|souls")],
+        #[InlineKeyboardButton(text=BTN_SECTION_SOULS, callback_data=f"{CB_SEC}|souls")],
         [InlineKeyboardButton(text=BTN_SECTION_BOTS,  callback_data=f"{CB_SEC}|bots")],
         [InlineKeyboardButton(text=BTN_SECTION_VSERV, callback_data=f"{CB_SEC}|vserv")],
         [InlineKeyboardButton(text=BTN_SECTION_FREE,  callback_data=f"{CB_SEC}|free")],
     ])
 
-def souls_submenu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_GROUP_ADMIN_CHAT, callback_data=f"{CB_SOULS}|chat")],
-        [InlineKeyboardButton(text=BTN_GROUP_ADMIN_CALL, callback_data=f"{CB_SOULS}|call")],
-        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
-    ])
+#def souls_submenu_kb() -> InlineKeyboardMarkup:
+    #return InlineKeyboardMarkup(inline_keyboard=[
+        #[InlineKeyboardButton(text=BTN_GROUP_ADMIN_CHAT, callback_data=f"{CB_SOULS}|chat")],
+        #[InlineKeyboardButton(text=BTN_GROUP_ADMIN_CALL, callback_data=f"{CB_SOULS}|call")],
+        #[InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{CB_MAIN}|menu")],
+    #])
 
-def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_ACTION}|send|{kind}")],
-        [InlineKeyboardButton(text=BTN_CANCEL,       callback_data=f"{CB_ACTION}|cancel|{kind}")],
-    ])
+#def after_rules_kb(kind: str) -> InlineKeyboardMarkup:
+    #return InlineKeyboardMarkup(inline_keyboard=[
+        #[InlineKeyboardButton(text=BTN_SEND_REQUEST, callback_data=f"{CB_ACTION}|send|{kind}")],
+        #[InlineKeyboardButton(text=BTN_CANCEL,       callback_data=f"{CB_ACTION}|cancel|{kind}")],
+    #])
 
 def quick_send_kb(kind: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
